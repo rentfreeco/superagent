@@ -1,11 +1,5 @@
-import { stat } from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "./path-exists.ts";
 
-export const isGitCheckout = async (directory: string): Promise<boolean> => {
-  try {
-    await stat(path.join(directory, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
-};
+export const isGitCheckout = (directory: string): Promise<boolean> =>
+  pathExists(path.join(directory, ".git"));
