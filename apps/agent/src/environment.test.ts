@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 import { LogLevel } from "@repo/core/slack";
 import { describe, expect, it } from "vitest";
 import { parseEnvironment } from "./environment.ts";
@@ -9,13 +11,31 @@ const slackVariables = {
 };
 
 describe("parseEnvironment", () => {
-  it("reads the Slack settings and defaults the log level to info", () => {
+  it("reads the Slack settings and defaults the log level and data directory", () => {
     expect(parseEnvironment({ ...slackVariables, PATH: "/usr/bin" })).toEqual({
       slackBotToken: "xoxb-1-2-3",
       slackAppToken: "xapp-1-2-3",
       slackOwnerId: "U0123ABCD",
       logLevel: LogLevel.INFO,
+      dataDirectory: path.join(homedir(), ".superagent"),
     });
+  });
+
+  it("takes the data directory from SUPERAGENT_DATA_DIR, resolved to an absolute path", () => {
+    expect(
+      parseEnvironment({ ...slackVariables, SUPERAGENT_DATA_DIR: "/data" })
+        .dataDirectory,
+    ).toBe("/data");
+    expect(
+      parseEnvironment({ ...slackVariables, SUPERAGENT_DATA_DIR: "state" })
+        .dataDirectory,
+    ).toBe(path.resolve("state"));
+  });
+
+  it("rejects an empty SUPERAGENT_DATA_DIR instead of guessing", () => {
+    expect(() =>
+      parseEnvironment({ ...slackVariables, SUPERAGENT_DATA_DIR: "" }),
+    ).toThrow(/must be a directory path/);
   });
 
   it("takes the log level from LOG_LEVEL", () => {

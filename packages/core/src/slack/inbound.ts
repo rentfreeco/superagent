@@ -1,5 +1,4 @@
 import type { AllMiddlewareArgs, AnyMiddlewareArgs, App } from "@slack/bolt";
-import { Deduper } from "./dedupe.ts";
 
 /** A request from the owner, addressed to the bot. */
 export interface InboundMessage {
@@ -19,44 +18,86 @@ export interface InboundMessage {
 
 export type MessageHandler = (message: InboundMessage) => void | Promise<void>;
 
-export type DropReason = "duplicate" | "self" | "not-owner";
+/** What the gate records about a Slack event when it first arrives. */
+export interface SlackEventRecord {
+  eventId: string;
+  type: string;
+  channel: string | null;
+  ts: string | null;
+  threadTs: string | null;
+  user: string | null;
+  text: string | null;
+}
+
+/** How the gate settles an event it doesn't pass on. */
+export type GateDisposition =
+  "dropped_self" | "dropped_not_owner" | "ignored" | "duplicate_message";
+
+/** Where the gate keeps the events it has seen, so dedupe survives a restart. */
+export interface EventLog {
+  record(event: SlackEventRecord): boolean;
+  claimMessage(eventId: string): boolean;
+  setDisposition(eventId: string, disposition: GateDisposition): void;
+}
 
 export interface InboundOptions {
   /** The only Slack user whose events get past the gate. */
   ownerUserId: string;
   onMessage: MessageHandler;
-  deduper?: Deduper;
+  eventLog: EventLog;
 }
 
+const HANDLED_EVENT_TYPES = new Set(["message", "app_mention"]);
+
 /**
- * Installs the inbound pipeline on a Bolt app: a global gate that drops
- * duplicate deliveries, the bot's own events and anything not from the owner,
- * then listeners that turn DMs and @-mentions into {@link InboundMessage}s.
+ * Installs the inbound pipeline on a Bolt app: a global gate that records
+ * every event once, drops redeliveries, the bot's own events and anything not
+ * from the owner, then listeners that turn DMs and @-mentions into
+ * {@link InboundMessage}s.
  *
  * Bolt acks Events API payloads before any middleware runs, so every event is
  * acked whether or not it gets past the gate.
  */
 export function registerInbound(
   app: App,
-  { ownerUserId, onMessage, deduper = new Deduper() }: InboundOptions,
+  { ownerUserId, onMessage, eventLog }: InboundOptions,
 ): void {
   app.use(async (args) => {
-    const reason = dropReason(args, ownerUserId, deduper);
-    if (reason === undefined) {
+    if ("event" in args) {
+      const eventId = args.body.event_id;
+      if (!eventLog.record(describeEvent(eventId, args.event))) {
+        args.logger.debug(`slack: dropped ${describe(args)}: duplicate`);
+        return;
+      }
+      const disposition = gateDisposition(args, ownerUserId);
+      if (disposition !== undefined) {
+        eventLog.setDisposition(eventId, disposition);
+        args.logger.debug(`slack: dropped ${describe(args)}: ${disposition}`);
+        return;
+      }
       await args.next();
       return;
     }
-    args.logger.debug(`slack: dropped ${describe(args)}: ${reason}`);
-    // Non-event payloads (actions, commands) leave the ack to a listener,
-    // and a dropped payload never reaches one.
+    // Bolt resolves the acting user for every payload type: user.id for
+    // actions, user_id for commands.
+    if (args.context.userId === ownerUserId) {
+      await args.next();
+      return;
+    }
+    args.logger.debug(`slack: dropped ${describe(args)}: not the owner`);
+    // Non-event payloads leave the ack to a listener, and a dropped payload
+    // never reaches one.
     if ("ack" in args && typeof args.ack === "function") await args.ack();
   });
 
   // The same message can arrive as both `message` and `app_mention` under
-  // different event_ids, so delivery is also deduplicated per message.
+  // different event_ids, so only the first event to claim it is delivered.
   const deliver = async (message: InboundMessage) => {
-    if (deduper.firstSeen(`message:${message.channel}:${message.ts}`))
-      await onMessage(message);
+    if (!eventLog.claimMessage(message.eventId)) {
+      eventLog.setDisposition(message.eventId, "duplicate_message");
+      return;
+    }
+    await onMessage(message);
   };
 
   // Only DMs count as requests here. In channels the bot answers @-mentions,
@@ -65,12 +106,14 @@ export function registerInbound(
     // Keep the subtypes that carry something the owner typed. Edits,
     // deletions, joins and bot posts are left out.
     if (
-      event.subtype !== undefined &&
-      event.subtype !== "file_share" &&
-      event.subtype !== "thread_broadcast"
-    )
+      (event.subtype !== undefined &&
+        event.subtype !== "file_share" &&
+        event.subtype !== "thread_broadcast") ||
+      event.channel_type !== "im"
+    ) {
+      eventLog.setDisposition(body.event_id, "ignored");
       return;
-    if (event.channel_type !== "im") return;
+    }
     await deliver({
       eventId: body.event_id,
       channel: event.channel,
@@ -83,7 +126,10 @@ export function registerInbound(
   });
 
   app.event("app_mention", async ({ event, body, context }) => {
-    if (event.user === undefined) return;
+    if (event.user === undefined) {
+      eventLog.setDisposition(body.event_id, "ignored");
+      return;
+    }
     await deliver({
       eventId: body.event_id,
       channel: event.channel,
@@ -98,18 +144,14 @@ export function registerInbound(
 
 type GateArgs = AnyMiddlewareArgs & AllMiddlewareArgs;
 
-function dropReason(
-  args: GateArgs,
+function gateDisposition(
+  args: Extract<GateArgs, { event: unknown }>,
   ownerUserId: string,
-  deduper: Deduper,
-): DropReason | undefined {
-  if ("event" in args) {
-    if (!deduper.firstSeen(`event:${args.body.event_id}`)) return "duplicate";
-    if (isFromSelf(args.event, args.context)) return "self";
-  }
-  // Bolt resolves the acting user for every payload type: event.user for
-  // events, user.id for actions, user_id for commands.
-  if (args.context.userId !== ownerUserId) return "not-owner";
+): GateDisposition | undefined {
+  if (isFromSelf(args.event, args.context)) return "dropped_self";
+  // For events, Bolt resolves the acting user from event.user.
+  if (args.context.userId !== ownerUserId) return "dropped_not_owner";
+  if (!HANDLED_EVENT_TYPES.has(args.event.type)) return "ignored";
   return undefined;
 }
 
@@ -123,6 +165,29 @@ function isFromSelf(
     (botId !== undefined && eventBotId === botId) ||
     (botUserId !== undefined && eventUser === botUserId)
   );
+}
+
+function describeEvent(eventId: string, event: object): SlackEventRecord {
+  const item = readObject(event, "item");
+  return {
+    eventId,
+    type: readString(event, "type") ?? "unknown",
+    channel: readString(event, "channel") ?? readString(item, "channel"),
+    ts: readString(event, "ts") ?? readString(item, "ts"),
+    threadTs: readString(event, "thread_ts"),
+    user: readString(event, "user"),
+    text: readString(event, "text"),
+  };
+}
+
+function readString(source: object, key: string): string | null {
+  const value: unknown = Reflect.get(source, key);
+  return typeof value === "string" ? value : null;
+}
+
+function readObject(source: object, key: string): object {
+  const value: unknown = Reflect.get(source, key);
+  return typeof value === "object" && value !== null ? value : {};
 }
 
 function describe(args: GateArgs): string {

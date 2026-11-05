@@ -43,26 +43,42 @@ packages/
       slack/                   @repo/core/slack: the bot's Socket Mode connection
         gateway.ts             SlackGateway: connect (auth.test, then Bolt App, then start),
                                fetchThread, reply, close
-        inbound.ts             the global gate (event_id dedupe, then self, then owner) and
-                               the DM / app_mention listeners that build InboundMessage
-        dedupe.ts              Deduper: TTL key set, also used to pass on a message once when
-                               Slack sends it as both `message` and `app_mention`
+        inbound.ts             the global gate (record the event once, then self, then owner,
+                               then handled types) and the DM / app_mention listeners that
+                               claim the message and build InboundMessage; EventLog is the
+                               interface the store's events table satisfies
         thread.ts              fetchThread: conversations.replies with cursor pagination
         reply.ts               postReply: chat.postMessage into the message's thread
         index.ts               the module's public exports
+      store/                   @repo/core/store: everything the service needs after a restart
+        open-store.ts          openStore: pragmas, the write-ahead-log check, migrations
+        migrations.ts          MIGRATIONS, applied in order and tracked by PRAGMA user_version
+        transaction.ts         BEGIN IMMEDIATE / COMMIT; nested calls join the outer one
+        events.ts              each Slack event once, its disposition, one claim per message
+        threads.ts             which task owns a thread; null means the router
+        tasks.ts               tasks and TASK_TRANSITIONS, the one task state machine
+        inputs.ts              what each worker has been told, deduped by (source, ref)
+        reports.ts             what each worker last said
+        outbox.ts              what must reach Slack, with dedupe keys and retry backoff
+        kv.ts                  JSON values by key, read back through a zod schema
+        open-test-store.ts     an in-memory store with a settable clock, for tests
       utils/                   small helpers, one per file
+      constants.ts             magic numbers: SQLite busy timeout, outbox backoff, task IDs
     slack-app-manifest.json    the Slack app's events, scopes, and Socket Mode switch
   eslint-config/               PRIVATE  shared ESLint flat config (Babel parser for TS)
   typescript-config/           PRIVATE  shared tsconfig bases
 apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
-      main.ts                  startup: environment, then config, then connect; disconnects
-                               on SIGINT / SIGTERM
-      environment.ts           parseEnvironment: the Slack settings and LOG_LEVEL, checked with zod
-      handle-message.ts        createMessageHandler: route, then reply or call startTask
+      main.ts                  startup: environment, config, store, then connect; disconnects
+                               and closes the store on SIGINT / SIGTERM
+      environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
+                               SUPERAGENT_DATA_DIR, checked with zod
+      handle-message.ts        createMessageHandler: route, reply or call startTask, then
+                               settle the event
       acknowledge-task.ts      the stand-in startTask until a task runner exists
-      constants.ts             CONFIG_PATH: superagent.config.ts at the repository root
+      constants.ts             CONFIG_PATH (superagent.config.ts at the repository root) and
+                               STORE_FILE_NAME
     .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
@@ -77,7 +93,7 @@ superagent.config.example.ts   the committed example; the real superagent.config
 
 Internal packages export their TypeScript source and have no build step. Node 24 runs it directly by stripping types, which sets hard limits on the syntax:
 
-- ALWAYS: relative imports name the `.ts` file: `import { Deduper } from "./dedupe.ts"`.
+- ALWAYS: relative imports name the `.ts` file: `import { postReply } from "./reply.ts"`.
 - ALWAYS: `import type` for type-only imports. `verbatimModuleSyntax` enforces it.
 - NEVER: `enum`, `namespace`, or constructor parameter properties. `erasableSyntaxOnly` enforces it.
 - `noUncheckedIndexedAccess` is on, so `array[0]` is `T | undefined`.
@@ -94,6 +110,19 @@ Verified against the installed versions:
 - `WebClient.paginate` returns untyped pages. Paginate the typed method with `cursor` instead.
 - zod 4 reports a record key that fails its schema as a generic "Invalid key in record", dropping the key schema's message. Give the record an `error` function that handles `invalid_key`, as `repos/config.ts` does.
 - `@babel/eslint-parser` 8 parses in a worker thread unless `babelOptions` sets both `babelrc: false` and `configFile: false`. The shared config sets neither, so its parser options must be structured-cloneable: a path string, never a function or an imported module.
+- `node:sqlite` on Node 24.21 needs no flag, bundles SQLite 3.53, and has no transaction helper; `DatabaseSync.isTransaction` says whether one is open. Binding a named parameter the SQL doesn't use throws, so pass exactly the parameters a statement names. `INSERT … ON CONFLICT DO NOTHING RETURNING` returns no row for a conflict.
+
+## Store
+
+All state the service needs after a restart lives in `@repo/core/store`, one SQLite file in write-ahead-logging mode at `$SUPERAGENT_DATA_DIR/state.db`.
+
+- MUST: Settle every event. The gate or the message handler sets its disposition once it has acted; an event left `received` is unfinished and gets retried after a restart.
+- MUST: Set a disposition only after the work it records, so a crash in between leaves the event unfinished instead of lost.
+- MUST: Change a task's state only through `store.tasks.transition`. `TASK_TRANSITIONS` is the one state machine; an illegal move throws.
+- MUST: Never edit a migration that has shipped. Add a new one to the end of `MIGRATIONS`.
+- MUST: Keep transactions synchronous and short. `store.transaction` refuses async work, and the whole store is synchronous.
+- NEVER: open the same store from two processes, or keep it on a network filesystem. `openStore` refuses to run unless SQLite really switched to write-ahead logging.
+- Slack posts will go through `store.outbox` once the outbox sender exists. Until then `SlackGateway.reply` posts directly.
 
 ## Slack
 

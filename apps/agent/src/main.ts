@@ -1,7 +1,9 @@
+import path from "node:path";
 import { loadConfig, type Repo } from "@repo/core/repos";
 import { SlackGateway } from "@repo/core/slack";
+import { openStore } from "@repo/core/store";
 import { acknowledgeTask } from "./acknowledge-task.ts";
-import { CONFIG_PATH } from "./constants.ts";
+import { CONFIG_PATH, STORE_FILE_NAME } from "./constants.ts";
 import { parseEnvironment } from "./environment.ts";
 import { createMessageHandler } from "./handle-message.ts";
 
@@ -13,23 +15,34 @@ const describeChannels = (channelRepos: ReadonlyMap<string, Repo>): string =>
 const main = async (): Promise<void> => {
   const environment = parseEnvironment(process.env);
   const channelRepos = await loadConfig(CONFIG_PATH);
-  const slack = await SlackGateway.connect({
-    botToken: environment.slackBotToken,
-    appToken: environment.slackAppToken,
-    ownerUserId: environment.slackOwnerId,
-    logLevel: environment.logLevel,
-    onMessage: createMessageHandler({
-      channelRepos,
-      startTask: acknowledgeTask,
-    }),
+  const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
+  const store = openStore({ path: storePath });
+
+  const connectToSlack = () =>
+    SlackGateway.connect({
+      botToken: environment.slackBotToken,
+      appToken: environment.slackAppToken,
+      ownerUserId: environment.slackOwnerId,
+      logLevel: environment.logLevel,
+      eventLog: store.events,
+      onMessage: createMessageHandler({
+        channelRepos,
+        startTask: acknowledgeTask,
+        events: store.events,
+      }),
+    });
+  const slack = await connectToSlack().catch((error: unknown) => {
+    store.close();
+    throw error;
   });
   console.log(
-    `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}`,
+    `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}`,
   );
 
   const disconnect = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`superagent: ${signal} received, disconnecting`);
     await slack.close();
+    store.close();
     process.exit();
   };
   process.once("SIGINT", disconnect);

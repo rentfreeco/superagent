@@ -23,7 +23,8 @@
         "SLACK_BOT_TOKEN",
         "SLACK_APP_TOKEN",
         "SLACK_OWNER_ID",
-        "LOG_LEVEL"
+        "LOG_LEVEL",
+        "SUPERAGENT_DATA_DIR"
       ]
     }
   }

@@ -28,13 +28,18 @@ const setup = () => {
   const fetchThread = vi.fn(async () => []);
   const slack: SlackThreads = { reply, fetchThread };
   const startTask = vi.fn(async () => {});
-  const handleMessage = createMessageHandler({ channelRepos, startTask });
-  return { handleMessage, reply, slack, startTask };
+  const setDisposition = vi.fn();
+  const handleMessage = createMessageHandler({
+    channelRepos,
+    startTask,
+    events: { setDisposition },
+  });
+  return { handleMessage, reply, setDisposition, slack, startTask };
 };
 
 describe("createMessageHandler", () => {
-  it("starts a task for a mention in a mapped channel", async () => {
-    const { handleMessage, reply, slack, startTask } = setup();
+  it("starts a task for a mention in a mapped channel and settles it as routed", async () => {
+    const { handleMessage, reply, setDisposition, slack, startTask } = setup();
     const message = inboundMessage({});
 
     await handleMessage(message, slack);
@@ -45,10 +50,11 @@ describe("createMessageHandler", () => {
       slack,
     });
     expect(reply).not.toHaveBeenCalled();
+    expect(setDisposition).toHaveBeenCalledExactlyOnceWith("Ev1", "routed");
   });
 
-  it("replies to a DM instead of starting a task", async () => {
-    const { handleMessage, reply, slack, startTask } = setup();
+  it("replies to a DM instead of starting a task and settles it as replied", async () => {
+    const { handleMessage, reply, setDisposition, slack, startTask } = setup();
     const message = inboundMessage({ channel: "D0123ABCD", via: "dm" });
 
     await handleMessage(message, slack);
@@ -58,6 +64,7 @@ describe("createMessageHandler", () => {
       expect.stringContaining("DMs don't map to a repo"),
     );
     expect(startTask).not.toHaveBeenCalled();
+    expect(setDisposition).toHaveBeenCalledExactlyOnceWith("Ev1", "replied");
   });
 
   it("replies to a mention in an unmapped channel", async () => {
@@ -71,5 +78,15 @@ describe("createMessageHandler", () => {
       expect.stringContaining("C0999ZZZZ"),
     );
     expect(startTask).not.toHaveBeenCalled();
+  });
+
+  it("leaves the event unsettled when handling fails, so it can be retried", async () => {
+    const { handleMessage, setDisposition, slack, startTask } = setup();
+    startTask.mockRejectedValueOnce(new Error("worktree failed"));
+
+    await expect(handleMessage(inboundMessage({}), slack)).rejects.toThrow(
+      "worktree failed",
+    );
+    expect(setDisposition).not.toHaveBeenCalled();
   });
 });

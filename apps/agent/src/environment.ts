@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 import { LogLevel } from "@repo/core/slack";
 import { z } from "zod";
 
@@ -6,6 +8,7 @@ export interface Environment {
   slackAppToken: string;
   slackOwnerId: string;
   logLevel: LogLevel;
+  dataDirectory: string;
 }
 
 const requiredString = () =>
@@ -27,6 +30,10 @@ const environmentSchema = z.object({
     "must be your Slack member ID, like U0123ABCD",
   ),
   LOG_LEVEL: z.enum(LogLevel).default(LogLevel.INFO),
+  SUPERAGENT_DATA_DIR: z
+    .string()
+    .min(1, "must be a directory path; leave it unset to use ~/.superagent")
+    .default(path.join(homedir(), ".superagent")),
 });
 
 export const parseEnvironment = (
@@ -43,5 +50,6 @@ export const parseEnvironment = (
     slackAppToken: result.data.SLACK_APP_TOKEN,
     slackOwnerId: result.data.SLACK_OWNER_ID,
     logLevel: result.data.LOG_LEVEL,
+    dataDirectory: path.resolve(result.data.SUPERAGENT_DATA_DIR),
   };
 };
