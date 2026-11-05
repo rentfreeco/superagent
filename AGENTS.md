@@ -32,23 +32,35 @@ superagent is a personal coding agent you talk to in Slack. Each request becomes
 packages/
   core/                        PRIVATE  the service's core logic, one module per subpath export
     src/
+      repos/                   @repo/core/repos: which repo a message belongs to
+        config.ts              SuperagentConfig and Repo types, defineConfig, and parseConfig
+                               (the zod schema, including channel -> repo cross-checks)
+        load-config.ts         loadConfig: import the config file, validate it, confirm each
+                               repo path is a git checkout, return channel ID -> Repo
+        route-message.ts       routeMessage: a mapped channel's repo, or the reply for a DM
+                               or an unmapped channel
+        index.ts               the module's public exports
       slack/                   @repo/core/slack: the bot's Socket Mode connection
         gateway.ts             SlackGateway: connect (auth.test, then Bolt App, then start),
-                               fetchThread, close
+                               fetchThread, reply, close
         inbound.ts             the global gate (event_id dedupe, then self, then owner) and
                                the DM / app_mention listeners that build InboundMessage
         dedupe.ts              Deduper: TTL key set, also used to pass on a message once when
                                Slack sends it as both `message` and `app_mention`
         thread.ts              fetchThread: conversations.replies with cursor pagination
+        reply.ts               postReply: chat.postMessage into the message's thread
         index.ts               the module's public exports
+      utils/                   small helpers, one per file
     slack-app-manifest.json    the Slack app's events, scopes, and Socket Mode switch
   eslint-config/               PRIVATE  shared ESLint flat config (Babel parser for TS)
   typescript-config/           PRIVATE  shared tsconfig bases
 apps/                          in the workspace globs, empty so far
+superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
 
 - MUST: Keep `@repo/core/slack` transport-only: it delivers `InboundMessage`s and reads threads. Repo selection, tasks, and Claude Code sessions belong in their own `core` modules.
 - A task is keyed by `channel` + `threadTs`. `threadTs` is the thread root, so follow-ups in a thread land on the same task.
+- MUST: Decide a request's repo with `routeMessage` before any work starts. A message with no repo gets the route's reply, never a guessed repo.
 
 ## TypeScript and Node
 
@@ -61,7 +73,7 @@ Internal packages export their TypeScript source and have no build step. Node 24
 
 ## Library versions newer than you know
 
-Bolt 5.1, `@slack/web-api` 8.3, `@slack/types` 3.3, Vitest 5.1, TypeScript 7.0, ESLint 10.9, Babel 8, and pnpm 11.25 may all differ from your training data. Read the installed source and `.d.ts` files before relying on a remembered API. Bolt is at `packages/core/node_modules/@slack/bolt/dist/`.
+Bolt 5.1, `@slack/web-api` 8.3, `@slack/types` 3.3, zod 4.6, Vitest 5.1, TypeScript 7.0, ESLint 10.9, Babel 8, and pnpm 11.25 may all differ from your training data. Read the installed source and `.d.ts` files before relying on a remembered API. Bolt is at `packages/core/node_modules/@slack/bolt/dist/`.
 
 Verified against the installed versions:
 
@@ -69,6 +81,7 @@ Verified against the installed versions:
 - Passing `botId` and `botUserId` to `new App` skips Bolt's own `auth.test`.
 - `context.userId` is the acting user for every payload type: `event.user`, `user.id` for actions, `user_id` for commands.
 - `WebClient.paginate` returns untyped pages. Paginate the typed method with `cursor` instead.
+- zod 4 reports a record key that fails its schema as a generic "Invalid key in record", dropping the key schema's message. Give the record an `error` function that handles `invalid_key`, as `repos/config.ts` does.
 - `@babel/eslint-parser` 8 parses in a worker thread unless `babelOptions` sets both `babelrc: false` and `configFile: false`. The shared config sets neither, so its parser options must be structured-cloneable: a path string, never a function or an imported module.
 
 ## Slack
@@ -105,7 +118,7 @@ pnpm test
 
 - MUST: Never push to `main`, force-push, or merge a pull request without fresh, explicit user confirmation for that exact action.
 - MUST: Write commits as Conventional Commits, `type(scope): summary`, scoped to the workspace you touched (`core`, `eslint-config`, `typescript-config`, or `repo` for the root). Branches are `type/short-description`. `CONTRIBUTING.md` has the full process.
-- MUST: Never commit a token. `.env` and `.env.local` are git-ignored.
+- MUST: Never commit a token or `superagent.config.ts`. `.env`, `.env.local`, and `superagent.config.ts` are git-ignored.
 - Nothing is published to npm, so there is no release process to authorize.
 
 ## Reference reading

@@ -5,6 +5,9 @@ node_modules
 .pnp
 .pnp.js
 
+# Local superagent config: channel IDs and local repo paths
+superagent.config.ts
+
 # Local env files
 .env
 .env.local

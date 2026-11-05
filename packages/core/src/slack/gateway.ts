@@ -1,5 +1,10 @@
 import { App, type LogLevel, webApi } from "@slack/bolt";
-import { type MessageHandler, registerInbound } from "./inbound.ts";
+import {
+  type InboundMessage,
+  type MessageHandler,
+  registerInbound,
+} from "./inbound.ts";
+import { postReply } from "./reply.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
 
 export interface SlackGatewayOptions {
@@ -59,6 +64,13 @@ export class SlackGateway {
   /** Reads a thread's full history from Slack. Nothing is cached, so each call reflects the thread as it is now. */
   fetchThread(channel: string, threadTs: string): Promise<ThreadMessage[]> {
     return fetchThread(this.app.client, this.identity, channel, threadTs);
+  }
+
+  reply(
+    target: Pick<InboundMessage, "channel" | "threadTs">,
+    text: string,
+  ): Promise<void> {
+    return postReply(this.app.client, target, text);
   }
 
   async close(): Promise<void> {

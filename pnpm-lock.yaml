@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@repo/core':
+        specifier: workspace:*
+        version: link:packages/core
       prettier:
         specifier: 3.9.6
         version: 3.9.6
@@ -23,6 +26,9 @@ importers:
       '@slack/bolt':
         specifier: 5.1.0
         version: 5.1.0(@types/express@5.0.6)(supports-color@7.2.0)(undici@8.12.3)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@repo/eslint-config':
         specifier: workspace:*
@@ -1698,6 +1704,9 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@babel/code-frame@7.29.7':
@@ -3221,3 +3230,5 @@ snapshots:
       zod: 4.4.3
 
   zod@4.4.3: {}
+
+  zod@4.6.7: {}
