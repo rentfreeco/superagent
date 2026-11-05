@@ -14,12 +14,20 @@ const slack = await SlackGateway.connect({
   appToken, // xapp-…
   ownerUserId, // U…
   eventLog: store.events,
-  onMessage: async (message, slack) => {
-    const history = await slack.fetchThread(message.channel, message.threadTs);
-    await slack.reply(message, "on it");
-    store.events.setDisposition(message.eventId, "replied");
+  onMessage: (message) => {
+    store.transaction(() => {
+      store.outbox.enqueue({
+        dedupeKey: `reply:${message.eventId}`,
+        channel: message.channel,
+        threadTs: message.threadTs,
+        message: { kind: "post", text: "on it" },
+      });
+      store.events.setDisposition(message.eventId, "replied");
+    });
+    outboxSender.wake();
   },
 });
+outboxSender.start(slack);
 ```
 
 `onMessage` gets the gateway as its second argument, so a handler never depends on `connect` having returned. `apps/agent` is the real wiring.
@@ -32,7 +40,9 @@ What reaches `onMessage`:
 
 Every event is acked as soon as it arrives (Bolt does this before any middleware runs), so a slow handler doesn't trigger Slack retries. The gate records each event in `eventLog` (the store's `events` table) before anything else, so dedupe survives a restart, and it settles every event it drops with the reason: `dropped_self`, `dropped_not_owner`, `ignored`, or `duplicate_message`. An event that reaches `onMessage` stays `received` until the handler settles it.
 
-`message.threadTs` is the thread's root ts, which is a stable key for "one task per thread". `fetchThread` reads the whole thread from Slack on each call and marks the bot's own posts with `fromSelf`. `slack.reply(message, text)` posts into the message's thread.
+`message.threadTs` is the thread's root ts, which is a stable key for "one task per thread". `fetchThread` reads the whole thread from Slack on each call and marks the bot's own posts with `fromSelf`.
+
+The gateway's `post`, `react`, `findPost`, and `classifyFailure` exist for the outbox sender, which is the only thing that posts. They use their own Slack client, with no built-in retries, rate limits reported as errors, and a 10-second timeout, so a stuck call can't hold up the queue and the outbox's backoff is the only retry.
 
 ### Slack app setup
 
@@ -50,10 +60,10 @@ import { loadConfig, routeMessage } from "@repo/core/repos";
 
 const channelRepos = await loadConfig("superagent.config.ts");
 
-// inside onMessage(message, slack):
+// inside onMessage(message):
 const route = routeMessage(channelRepos, message);
-if (route.kind === "reply") return slack.reply(message, route.text);
-// route.repo: { name, github, path, baseBranch }
+// route.kind === "reply": queue route.text as a post in the message's thread
+// route.kind === "repo": route.repo is { name, github, path, baseBranch }
 ```
 
 The config is a TypeScript file at the repository root. Copy [`superagent.config.example.ts`](../../superagent.config.example.ts) to `superagent.config.ts`, which is git-ignored:
@@ -122,3 +132,25 @@ store.transaction(() => {
 | `kv`      | Router session ID, prompt version, cursors                 | Values are JSON, read back through the zod schema you pass                                          |
 
 `store.transaction(work)` runs synchronous work in one `BEGIN IMMEDIATE` transaction and rolls it all back if `work` throws. A transaction inside another joins the outer one. `openTestStore()` gives tests an in-memory store with a clock they can move.
+
+## `@repo/core/outbox`
+
+The sender that turns outbox rows into Slack posts and reactions. Everything the bot says goes through it, so a reply queued just before a crash still goes out after the restart.
+
+```ts
+import { createOutboxSender } from "@repo/core/outbox";
+
+const outboxSender = createOutboxSender({
+  outbox: store.outbox,
+  logger: console,
+});
+outboxSender.start(slack); // the gateway is the delivery
+outboxSender.wake(); // after queueing something, to send it now
+await outboxSender.stop(); // on shutdown: finishes the post in flight
+```
+
+- **When it sends:** right away when woken, and on a one-second poll that also picks up retries once their backoff has passed. Only one pass runs at a time; a wake during a pass asks for one more.
+- **Order:** an entry waits while an earlier entry in the same thread is still pending, so a retry never reorders a conversation.
+- **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry; a rate limit waits at least as long as Slack's `Retry-After` asks. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent.
+- **No double posts after a crash:** the attempt is counted before Slack is called, and each post carries its dedupe key in message metadata. Before posting an entry that was attempted before, the sender looks for the bot's post with that key in the thread, and records it instead of posting again.
+- **Stopping:** `stop()` lets a post already on its way finish, and starts nothing after that, including a post that was waiting on the duplicate check. An entry left that way stays pending and goes out after the next start.

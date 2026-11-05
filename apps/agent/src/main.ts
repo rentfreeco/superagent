@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createOutboxSender } from "@repo/core/outbox";
 import { loadConfig, type Repo } from "@repo/core/repos";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
@@ -17,6 +18,10 @@ const main = async (): Promise<void> => {
   const channelRepos = await loadConfig(CONFIG_PATH);
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
+  const outboxSender = createOutboxSender({
+    outbox: store.outbox,
+    logger: console,
+  });
 
   const connectToSlack = () =>
     SlackGateway.connect({
@@ -28,19 +33,22 @@ const main = async (): Promise<void> => {
       onMessage: createMessageHandler({
         channelRepos,
         startTask: acknowledgeTask,
-        events: store.events,
+        store,
+        wakeOutbox: outboxSender.wake,
       }),
     });
   const slack = await connectToSlack().catch((error: unknown) => {
     store.close();
     throw error;
   });
+  outboxSender.start(slack);
   console.log(
     `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}`,
   );
 
   const disconnect = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`superagent: ${signal} received, disconnecting`);
+    await outboxSender.stop();
     await slack.close();
     store.close();
     process.exit();

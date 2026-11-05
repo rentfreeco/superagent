@@ -47,11 +47,17 @@ describe("outbox", () => {
     expect(store.outbox.pending()).toHaveLength(1);
   });
 
-  it("stops offering an entry once it is sent", () => {
+  it("counts an attempt before it is made, and stops offering a sent entry", () => {
     const { store } = openTestStore();
-    const entry = store.outbox.enqueue(summaryPost);
-    store.outbox.markSent(entry?.id ?? -1, "100.000009");
+    const entryId = store.outbox.enqueue(summaryPost)?.id ?? -1;
+
+    expect(store.outbox.beginAttempt(entryId).attempts).toBe(1);
+    store.outbox.markSent(entryId, "100.000009");
+
     expect(store.outbox.pending()).toEqual([]);
+    expect(() => store.outbox.beginAttempt(entryId)).toThrow(
+      `No pending outbox entry ${entryId}`,
+    );
   });
 
   it("backs off exponentially up to the cap, then gives up", () => {
@@ -60,6 +66,7 @@ describe("outbox", () => {
     const delays: number[] = [];
 
     for (let attempt = 1; attempt < OUTBOX_MAX_ATTEMPTS; attempt += 1) {
+      store.outbox.beginAttempt(entryId);
       const entry = store.outbox.markFailed(entryId, "ratelimited");
       expect(entry.status).toBe("pending");
       expect(store.outbox.pending()).toEqual([]);
@@ -67,6 +74,7 @@ describe("outbox", () => {
       clock.now = entry.nextAttemptAt;
       expect(store.outbox.pending().map(({ id }) => id)).toEqual([entryId]);
     }
+    store.outbox.beginAttempt(entryId);
     const lastAttempt = store.outbox.markFailed(entryId, "ratelimited");
 
     expect(delays).toEqual(
@@ -85,6 +93,65 @@ describe("outbox", () => {
     });
     clock.now += OUTBOX_MAX_RETRY_DELAY_MS;
     expect(store.outbox.pending()).toEqual([]);
+  });
+
+  it("waits at least as long as asked, even when the backoff is shorter", () => {
+    const { store, clock } = openTestStore();
+    const entryId = store.outbox.enqueue(summaryPost)?.id ?? -1;
+
+    store.outbox.beginAttempt(entryId);
+    const askedToWait = store.outbox.markFailed(entryId, "ratelimited", 30_000);
+    expect(askedToWait.nextAttemptAt - clock.now).toBe(30_000);
+
+    clock.now = askedToWait.nextAttemptAt;
+    store.outbox.beginAttempt(entryId);
+    const backoffIsLonger = store.outbox.markFailed(entryId, "ratelimited", 1);
+    expect(backoffIsLonger.nextAttemptAt - clock.now).toBe(
+      OUTBOX_BASE_RETRY_DELAY_MS * 2,
+    );
+  });
+
+  it("fails an entry at once when it can never be delivered", () => {
+    const { store } = openTestStore();
+    const entryId = store.outbox.enqueue(summaryPost)?.id ?? -1;
+    store.outbox.beginAttempt(entryId);
+
+    expect(
+      store.outbox.markUndeliverable(entryId, "not_in_channel"),
+    ).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      lastError: "not_in_channel",
+    });
+    expect(store.outbox.pending()).toEqual([]);
+  });
+
+  it("holds a thread's later entries until the earlier one is settled", () => {
+    const { store, clock } = openTestStore();
+    const first = store.outbox.enqueue(summaryPost)?.id ?? -1;
+    const second =
+      store.outbox.enqueue({ ...summaryPost, dedupeKey: "report:2" })?.id ?? -1;
+    const otherThread =
+      store.outbox.enqueue({
+        ...summaryPost,
+        dedupeKey: "report:3",
+        threadTs: "200.000001",
+      })?.id ?? -1;
+    const pendingIds = () => store.outbox.pending().map(({ id }) => id);
+
+    expect(pendingIds()).toEqual([first, otherThread]);
+
+    store.outbox.beginAttempt(first);
+    const retry = store.outbox.markFailed(first, "ratelimited");
+    expect(pendingIds()).toEqual([otherThread]);
+
+    clock.now = retry.nextAttemptAt;
+    store.outbox.markSent(otherThread, "200.000002");
+    expect(pendingIds()).toEqual([first]);
+
+    store.outbox.beginAttempt(first);
+    store.outbox.markUndeliverable(first, "msg_too_long");
+    expect(pendingIds()).toEqual([second]);
   });
 
   it("refuses to fail an entry that already went out", () => {
