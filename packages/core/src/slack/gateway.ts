@@ -1,5 +1,9 @@
 import { App, type LogLevel, webApi } from "@slack/bolt";
-import { type InboundMessage, registerInbound } from "./inbound.ts";
+import {
+  type EventLog,
+  type InboundMessage,
+  registerInbound,
+} from "./inbound.ts";
 import { postReply } from "./reply.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
 
@@ -16,6 +20,8 @@ export interface SlackGatewayOptions {
   /** The only Slack user the bot listens to. */
   ownerUserId: string;
   onMessage: SlackMessageHandler;
+  /** Where the gate records every event it sees, such as the store's events table. */
+  eventLog: EventLog;
   logLevel?: LogLevel;
 }
 
@@ -35,6 +41,7 @@ export class SlackGateway {
     appToken,
     ownerUserId,
     onMessage,
+    eventLog,
     logLevel,
   }: SlackGatewayOptions): Promise<SlackGateway> {
     const auth = await new webApi.WebClient(botToken).auth.test();
@@ -61,6 +68,7 @@ export class SlackGateway {
     registerInbound(app, {
       ownerUserId,
       onMessage: (message) => onMessage(message, gateway),
+      eventLog,
     });
     await app.start();
     return gateway;

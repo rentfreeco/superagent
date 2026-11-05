@@ -8,6 +8,11 @@ node_modules
 # Local superagent config: channel IDs and local repo paths
 superagent.config.ts
 
+# SQLite stores, in case SUPERAGENT_DATA_DIR points inside the repo
+*.db
+*.db-shm
+*.db-wal
+
 # Local env files
 .env
 .env.local
