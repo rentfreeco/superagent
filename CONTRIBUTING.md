@@ -48,11 +48,11 @@ For anything larger than a bug fix, open an issue describing the change before y
    ```sh
    pnpm format
    pnpm lint
-   pnpm check-types
+   pnpm typecheck
    pnpm test
    ```
 
-   CI (`.github/workflows/ci.yml`) runs the lint, type-check, test, and build steps on every pull request and every push to `main`, so a red check there means one of these would have failed locally too. It does not run `pnpm format`; that one is on you.
+   The Code Quality workflow (`.github/workflows/code-quality.yml`) runs `pnpm lint` and `pnpm typecheck` on every pull request and every push to `main`, so a red check there means one of those would have failed locally too. It does not run `pnpm format` or `pnpm test`; those are on you.
 
 4. In the description, say what the change does and why. Link the issue it addresses. Call out anything a reviewer must know: a new Slack scope or event subscription, a new environment variable, a behavior change.
 5. Pull requests are squash-merged, so the pull request title must itself be a valid conventional commit message.
@@ -115,7 +115,7 @@ From the root, Turborepo runs a task across every workspace that defines it:
 
 ```sh
 pnpm lint         # eslint across the repo
-pnpm check-types  # tsc across the repo
+pnpm typecheck  # tsc across the repo
 pnpm test         # vitest across the repo
 pnpm format       # prettier --write on ts, tsx and md files
 ```
@@ -126,7 +126,7 @@ To target one workspace, filter by its package name:
 
 ```sh
 pnpm --filter @repo/core test
-pnpm --filter @repo/core check-types
+pnpm --filter @repo/core typecheck
 ```
 
 ### Tests
@@ -139,7 +139,7 @@ The shared ESLint config parses TypeScript with Babel, whose scope analysis cann
 
 ### Adding a workspace package
 
-Run `turbo gen workspace` or create the folder by hand. Either way the new package needs a `package.json` named `@repo/<name>` with `"type": "module"`, a `tsconfig.json` extending `@repo/typescript-config/base.json`, and an `exports` map pointing at its source files. Give it `lint` and `check-types` scripts, plus `test` if it has tests, so the root commands pick it up. `packages/core` is the reference.
+Run `turbo gen workspace` or create the folder by hand. Either way the new package needs a `package.json` named `@repo/<name>` with `"type": "module"`, a `tsconfig.json` extending `@repo/typescript-config/base.json`, and an `exports` map pointing at its source files. Give it `lint` and `typecheck` scripts, plus `test` if it has tests, so the root commands pick it up. `packages/core` is the reference.
 
 ### Turborepo configuration
 
