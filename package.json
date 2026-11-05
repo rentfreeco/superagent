@@ -1,6 +1,7 @@
 {
   "name": "superagent",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
@@ -10,6 +11,7 @@
     "test": "turbo run test"
   },
   "devDependencies": {
+    "@repo/core": "workspace:*",
     "prettier": "3.9.6",
     "turbo": "^2.11.10",
     "typescript": "7.0.2"

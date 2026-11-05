@@ -87,6 +87,15 @@ Working on the Slack side needs a Slack app and a workspace to install it in. Cr
 
 A change that needs a new scope or event updates the manifest in the same pull request. Existing apps pick it up once the manifest is pasted again and the app is reinstalled.
 
+### Repo config
+
+Which repo a request is about comes from the channel it is sent in. Copy `superagent.config.example.ts` to `superagent.config.ts`, which is git-ignored, and fill it in:
+
+- `repos`: one entry per repo, with its GitHub `owner/name`, the path to a local git checkout (relative to the config file, or starting with `~`), and its base branch.
+- `channels`: Slack channel ID → repo name. Use the ID, not the channel name: open the channel, click its name, and copy the ID from the bottom of the **About** tab. Then invite the bot to the channel with `/invite @superagent`.
+
+The config is validated when it loads, and a mistake stops startup with an error that names it: a misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a path that isn't a git checkout. In a mapped channel, @-mention the bot. A DM, or a mention in an unmapped channel, gets a reply saying what to do instead.
+
 ### Environment variables
 
 Nothing reads environment variables yet: `SlackGateway.connect` in `@repo/core/slack` takes the two tokens and the owner ID as arguments. Keep the values in a `.env` or `.env.local` file, both of which are git-ignored, and never commit a token.
@@ -99,7 +108,7 @@ Nothing reads environment variables yet: `SlackGateway.connect` in `@repo/core/s
 | `packages/eslint-config`     | shared ESLint configuration                                           |
 | `packages/typescript-config` | shared `tsconfig` bases                                               |
 
-The first `core` module is `@repo/core/slack`, the bot's Socket Mode connection; `packages/core/README.md` describes what it lets through. `apps/*` is part of the workspace but empty for now.
+`@repo/core/slack` is the bot's Socket Mode connection, and `@repo/core/repos` decides which repo a message belongs to; `packages/core/README.md` describes both. `apps/*` is part of the workspace but empty for now.
 
 Internal packages are named `@repo/<name>`, export their TypeScript source directly, and have no build step. Consumers depend on them with `"@repo/<name>": "workspace:*"`.
 
