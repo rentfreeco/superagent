@@ -18,7 +18,13 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_OWNER_ID",
+        "LOG_LEVEL"
+      ]
     }
   }
 }

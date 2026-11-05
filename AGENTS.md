@@ -54,13 +54,24 @@ packages/
     slack-app-manifest.json    the Slack app's events, scopes, and Socket Mode switch
   eslint-config/               PRIVATE  shared ESLint flat config (Babel parser for TS)
   typescript-config/           PRIVATE  shared tsconfig bases
-apps/                          in the workspace globs, empty so far
+apps/
+  agent/                       the bot process; `pnpm dev` runs it with restarts on change
+    src/
+      main.ts                  startup: environment, then config, then connect; disconnects
+                               on SIGINT / SIGTERM
+      environment.ts           parseEnvironment: the Slack settings and LOG_LEVEL, checked with zod
+      handle-message.ts        createMessageHandler: route, then reply or call startTask
+      acknowledge-task.ts      the stand-in startTask until a task runner exists
+      constants.ts             CONFIG_PATH: superagent.config.ts at the repository root
+    .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
 
 - MUST: Keep `@repo/core/slack` transport-only: it delivers `InboundMessage`s and reads threads. Repo selection, tasks, and Claude Code sessions belong in their own `core` modules.
 - A task is keyed by `channel` + `threadTs`. `threadTs` is the thread root, so follow-ups in a thread land on the same task.
 - MUST: Decide a request's repo with `routeMessage` before any work starts. A message with no repo gets the route's reply, never a guessed repo.
+- MUST: Keep `apps/agent` to wiring: reading the environment, connecting, and passing messages to `core`. Logic that could be tested without a process belongs in `@repo/core`.
+- New work for a routed request plugs in as a `StartTask` (`apps/agent/src/handle-message.ts`), replacing `acknowledgeTask`.
 
 ## TypeScript and Node
 

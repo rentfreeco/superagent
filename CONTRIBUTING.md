@@ -98,17 +98,27 @@ The config is validated when it loads, and a mistake stops startup with an error
 
 ### Environment variables
 
-Nothing reads environment variables yet: `SlackGateway.connect` in `@repo/core/slack` takes the two tokens and the owner ID as arguments. Keep the values in a `.env` or `.env.local` file, both of which are git-ignored, and never commit a token.
+The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `apps/agent/.env.example` and fill it in:
+
+| Variable          | Value                                                       |
+| ----------------- | ----------------------------------------------------------- |
+| `SLACK_BOT_TOKEN` | the Bot User OAuth Token, `xoxb-…`                          |
+| `SLACK_APP_TOKEN` | the app-level token with `connections:write`, `xapp-…`      |
+| `SLACK_OWNER_ID`  | your member ID, `U…`                                        |
+| `LOG_LEVEL`       | optional: `debug`, `info` (the default), `warn`, or `error` |
+
+The bot checks all of them at startup and stops with an error naming each one that is missing or malformed, such as the two tokens swapped. `LOG_LEVEL=debug` also logs every event the owner gate drops, which helps when the bot seems to ignore a message. Never commit a token.
 
 ### Repository layout
 
 | Path                         | What it is                                                            |
 | ---------------------------- | --------------------------------------------------------------------- |
+| `apps/agent`                 | `agent`: the bot process, which wires `@repo/core` together           |
 | `packages/core`              | `@repo/core`: the service's core logic, one module per subpath export |
 | `packages/eslint-config`     | shared ESLint configuration                                           |
 | `packages/typescript-config` | shared `tsconfig` bases                                               |
 
-`@repo/core/slack` is the bot's Socket Mode connection, and `@repo/core/repos` decides which repo a message belongs to; `packages/core/README.md` describes both. `apps/*` is part of the workspace but empty for now.
+`@repo/core/slack` is the bot's Socket Mode connection, and `@repo/core/repos` decides which repo a message belongs to; `packages/core/README.md` describes both. `apps/agent` reads the environment and the config, connects, and routes each message; `apps/agent/README.md` describes it.
 
 Internal packages are named `@repo/<name>`, export their TypeScript source directly, and have no build step. Consumers depend on them with `"@repo/<name>": "workspace:*"`.
 
@@ -123,13 +133,14 @@ Node 24 runs that source as it is, by stripping the types, so `@repo/core` stick
 From the root, Turborepo runs a task across every workspace that defines it:
 
 ```sh
+pnpm dev          # run the bot, restarting it when a source file changes
 pnpm lint         # eslint across the repo
-pnpm typecheck  # tsc across the repo
+pnpm typecheck    # tsc across the repo
 pnpm test         # vitest across the repo
 pnpm format       # prettier --write on ts, tsx and md files
 ```
 
-`pnpm dev` and `pnpm build` exist as well, but no workspace defines those tasks yet.
+`pnpm --filter agent start` runs the bot once, without watching. `pnpm build` exists as well, but no workspace defines a build yet.
 
 To target one workspace, filter by its package name:
 
