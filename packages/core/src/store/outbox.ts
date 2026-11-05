@@ -50,10 +50,13 @@ export interface NewOutboxEntry {
 }
 
 export interface OutboxStore {
+  get(id: number): OutboxEntry | undefined;
   enqueue(entry: NewOutboxEntry): OutboxEntry | undefined;
   pending(): OutboxEntry[];
+  beginAttempt(id: number): OutboxEntry;
   markSent(id: number, slackTs: string | null): void;
   markFailed(id: number, error: string): OutboxEntry;
+  markUndeliverable(id: number, error: string): OutboxEntry;
 }
 
 const OUTBOX_COLUMNS =
@@ -71,6 +74,9 @@ export const createOutboxStore = (
   database: DatabaseSync,
   now: () => number,
 ): OutboxStore => {
+  const selectEntry = database.prepare(
+    `select ${OUTBOX_COLUMNS} from outbox where id = :id`,
+  );
   const insertEntry = database.prepare(
     `insert into outbox (dedupe_key, channel, thread_ts, kind, body, next_attempt_at, created_at)
      values (:dedupeKey, :channel, :threadTs, :kind, :body, :now, :now)
@@ -79,23 +85,52 @@ export const createOutboxStore = (
   );
   const selectPending = database.prepare(
     `select ${OUTBOX_COLUMNS} from outbox
-     where status = 'pending' and next_attempt_at <= :now order by id`,
+     where status = 'pending' and next_attempt_at <= :now
+       and not exists (
+         select 1 from outbox as earlier
+         where earlier.status = 'pending'
+           and earlier.channel = outbox.channel
+           and earlier.thread_ts is outbox.thread_ts
+           and earlier.id < outbox.id
+       )
+     order by id`,
+  );
+  const updateAttempt = database.prepare(
+    `update outbox set attempts = attempts + 1
+     where id = :id and status = 'pending'
+     returning ${OUTBOX_COLUMNS}`,
   );
   const updateSent = database.prepare(
-    `update outbox set status = 'sent', attempts = attempts + 1, slack_ts = :slackTs, sent_at = :now
+    `update outbox set status = 'sent', slack_ts = :slackTs, sent_at = :now
      where id = :id and status = 'pending'`,
   );
   const updateFailed = database.prepare(
     `update outbox set
-       attempts = attempts + 1,
        last_error = :error,
-       status = case when attempts + 1 >= :maxAttempts then 'failed' else 'pending' end,
-       next_attempt_at = :now + min(:baseDelay << attempts, :maxDelay)
+       status = case when attempts >= :maxAttempts then 'failed' else 'pending' end,
+       next_attempt_at = :now + min(:baseDelay << max(attempts - 1, 0), :maxDelay)
+     where id = :id and status = 'pending'
+     returning ${OUTBOX_COLUMNS}`,
+  );
+  const updateUndeliverable = database.prepare(
+    `update outbox set status = 'failed', last_error = :error
      where id = :id and status = 'pending'
      returning ${OUTBOX_COLUMNS}`,
   );
 
+  const requireUpdated = (
+    row: Record<string, unknown> | undefined,
+    id: number,
+  ): OutboxEntry => {
+    if (row === undefined) throw new Error(`No pending outbox entry ${id}`);
+    return toOutboxEntry(row);
+  };
+
   return {
+    get: (id) => {
+      const row = selectEntry.get({ id });
+      return row === undefined ? undefined : toOutboxEntry(row);
+    },
     enqueue: ({ dedupeKey, channel, threadTs, message }) => {
       const { kind, ...body } = message;
       const row = insertEntry.get({
@@ -109,22 +144,23 @@ export const createOutboxStore = (
       return row === undefined ? undefined : toOutboxEntry(row);
     },
     pending: () => selectPending.all({ now: now() }).map(toOutboxEntry),
+    beginAttempt: (id) => requireUpdated(updateAttempt.get({ id }), id),
     markSent: (id, slackTs) => {
       updateSent.run({ id, slackTs, now: now() });
     },
-    markFailed: (id, error) => {
-      const row = updateFailed.get({
+    markFailed: (id, error) =>
+      requireUpdated(
+        updateFailed.get({
+          id,
+          error,
+          now: now(),
+          maxAttempts: OUTBOX_MAX_ATTEMPTS,
+          baseDelay: OUTBOX_BASE_RETRY_DELAY_MS,
+          maxDelay: OUTBOX_MAX_RETRY_DELAY_MS,
+        }),
         id,
-        error,
-        now: now(),
-        maxAttempts: OUTBOX_MAX_ATTEMPTS,
-        baseDelay: OUTBOX_BASE_RETRY_DELAY_MS,
-        maxDelay: OUTBOX_MAX_RETRY_DELAY_MS,
-      });
-      if (row === undefined) {
-        throw new Error(`No pending outbox entry ${id}`);
-      }
-      return toOutboxEntry(row);
-    },
+      ),
+    markUndeliverable: (id, error) =>
+      requireUpdated(updateUndeliverable.get({ id, error }), id),
   };
 };

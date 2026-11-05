@@ -1,9 +1,10 @@
 import type { InboundMessage } from "@repo/core/slack";
-import { expect, it, vi } from "vitest";
+import { IN_MEMORY_STORE, openStore } from "@repo/core/store";
+import { expect, it } from "vitest";
 import { acknowledgeTask } from "./acknowledge-task.ts";
 
-it("tells the owner which repo the request was routed to", async () => {
-  const reply = vi.fn(async () => {});
+it("queues a post telling the owner which repo the request was routed to", () => {
+  const store = openStore({ path: IN_MEMORY_STORE });
   const message: InboundMessage = {
     eventId: "Ev1",
     channel: "C0123ABCD",
@@ -14,7 +15,7 @@ it("tells the owner which repo the request was routed to", async () => {
     via: "mention",
   };
 
-  await acknowledgeTask({
+  acknowledgeTask({
     message,
     repo: {
       name: "superagent",
@@ -22,11 +23,18 @@ it("tells the owner which repo the request was routed to", async () => {
       path: "/code/superagent",
       baseBranch: "main",
     },
-    slack: { reply, fetchThread: vi.fn(async () => []) },
+    store,
   });
 
-  expect(reply).toHaveBeenCalledExactlyOnceWith(
-    message,
-    expect.stringMatching(/\*superagent\* \(`pakgin\/superagent`\)/),
-  );
+  expect(store.outbox.pending()).toEqual([
+    expect.objectContaining({
+      dedupeKey: "ack:Ev1",
+      channel: "C0123ABCD",
+      threadTs: "100.000001",
+      message: {
+        kind: "post",
+        text: expect.stringMatching(/\*superagent\* \(`pakgin\/superagent`\)/),
+      },
+    }),
+  ]);
 });

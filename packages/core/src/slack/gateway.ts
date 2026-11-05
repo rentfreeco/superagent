@@ -1,10 +1,20 @@
 import { App, type LogLevel, webApi } from "@slack/bolt";
+import { SLACK_DELIVERY_TIMEOUT_MS } from "../constants.ts";
+import {
+  addReaction,
+  classifyDeliveryFailure,
+  type DeliveryFailure,
+  findOwnPost,
+  postMessage,
+  type SlackPost,
+  type SlackPostQuery,
+  type SlackReaction,
+} from "./delivery.ts";
 import {
   type EventLog,
   type InboundMessage,
   registerInbound,
 } from "./inbound.ts";
-import { postReply } from "./reply.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
 
 export type SlackMessageHandler = (
@@ -29,10 +39,19 @@ export interface SlackGatewayOptions {
 export class SlackGateway {
   readonly app: App;
   readonly identity: BotIdentity;
+  // Delivery fails fast and leaves retrying to the outbox. The default client
+  // retries for about half an hour and never times out, which would stall
+  // every entry queued behind one post.
+  readonly #deliveryClient: webApi.WebClient;
 
-  private constructor(app: App, identity: BotIdentity) {
+  private constructor(
+    app: App,
+    identity: BotIdentity,
+    deliveryClient: webApi.WebClient,
+  ) {
     this.app = app;
     this.identity = identity;
+    this.#deliveryClient = deliveryClient;
   }
 
   /** Resolves the bot's identity, installs the inbound pipeline and opens the connection. */
@@ -64,7 +83,13 @@ export class SlackGateway {
       convoStore: false,
       logLevel,
     });
-    const gateway = new SlackGateway(app, identity);
+    const deliveryClient = new webApi.WebClient(botToken, {
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+      timeout: SLACK_DELIVERY_TIMEOUT_MS,
+      logLevel,
+    });
+    const gateway = new SlackGateway(app, identity, deliveryClient);
     registerInbound(app, {
       ownerUserId,
       onMessage: (message) => onMessage(message, gateway),
@@ -79,11 +104,22 @@ export class SlackGateway {
     return fetchThread(this.app.client, this.identity, channel, threadTs);
   }
 
-  reply(
-    target: Pick<InboundMessage, "channel" | "threadTs">,
-    text: string,
-  ): Promise<void> {
-    return postReply(this.app.client, target, text);
+  /** Posts a message carrying its outbox dedupe key as metadata, and returns its ts. */
+  post(post: SlackPost): Promise<string> {
+    return postMessage(this.#deliveryClient, post);
+  }
+
+  react(reaction: SlackReaction): Promise<void> {
+    return addReaction(this.#deliveryClient, reaction);
+  }
+
+  /** Finds this bot's post with the given dedupe key, so a retry can tell whether an earlier attempt got through. */
+  findPost(query: SlackPostQuery): Promise<string | undefined> {
+    return findOwnPost(this.#deliveryClient, this.identity, query);
+  }
+
+  classifyFailure(error: unknown): DeliveryFailure {
+    return classifyDeliveryFailure(error);
   }
 
   async close(): Promise<void> {

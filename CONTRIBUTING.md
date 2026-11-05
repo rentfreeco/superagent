@@ -114,7 +114,7 @@ The bot checks all of them at startup and stops with an error naming each one th
 
 Everything the bot must remember across a restart, from which Slack events it has handled to its tasks and what it still has to post, lives in one SQLite file: `$SUPERAGENT_DATA_DIR/state.db`, in write-ahead-logging mode. The bot creates the file and its directory on first start, and runs any pending migrations each time it starts.
 
-- **Look inside while the bot runs:** `sqlite3 ~/.superagent/state.db`. Write-ahead logging lets a reader in alongside the bot, for example `select event_id, type, disposition from events order by received_at desc limit 20;` shows what the gate did with recent events.
+- **Look inside while the bot runs:** `sqlite3 ~/.superagent/state.db`. Write-ahead logging lets a reader in alongside the bot, for example `select event_id, type, disposition from events order by received_at desc limit 20;` shows what the gate did with recent events, and `select dedupe_key, status, attempts, last_error from outbox where status != 'sent';` shows what the bot still has to post or gave up on.
 - **Back it up:** `sqlite3 ~/.superagent/state.db ".backup state-backup.db"`. Copying `state.db` on its own while the bot runs can miss writes that are still in `state.db-wal`.
 - **Start over:** stop the bot, then delete `state.db`, `state.db-wal`, and `state.db-shm`.
 
@@ -135,7 +135,7 @@ Internal packages are named `@repo/<name>`, export their TypeScript source direc
 
 Node 24 runs that source as it is, by stripping the types, so `@repo/core` sticks to what type stripping allows:
 
-- Relative imports name the `.ts` file: `import { postReply } from "./reply.ts"`.
+- Relative imports name the `.ts` file: `import { postMessage } from "./delivery.ts"`.
 - Only erasable TypeScript syntax: no `enum`, no `namespace`, no constructor parameter properties. The `erasableSyntaxOnly` compiler option enforces this.
 - Type-only imports use `import type`, which `verbatimModuleSyntax` enforces.
 
