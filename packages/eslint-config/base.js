@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import babelParser from "@babel/eslint-parser";
 import js from "@eslint/js";
 import eslintConfigPrettier from "eslint-config-prettier";
@@ -18,7 +19,13 @@ export const config = [
       parserOptions: {
         requireConfigFile: false,
         babelOptions: {
-          presets: ["@babel/preset-typescript"],
+          // Babel resolves preset names from the working directory, where pnpm
+          // doesn't expose this package's dependencies, so pass a path
+          // resolved from here. It has to stay a string: the parser sends its
+          // options to a worker thread.
+          presets: [
+            fileURLToPath(import.meta.resolve("@babel/preset-typescript")),
+          ],
         },
       },
     },
