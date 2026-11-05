@@ -1,4 +1,5 @@
 import type { AllMiddlewareArgs, AnyMiddlewareArgs, App } from "@slack/bolt";
+import { readStringField } from "../utils/read-string-field.ts";
 
 /** A request from the owner, addressed to the bot. */
 export interface InboundMessage {
@@ -90,15 +91,8 @@ export function registerInbound(
     if ("ack" in args && typeof args.ack === "function") await args.ack();
   });
 
-  // The same message can arrive as both `message` and `app_mention` under
-  // different event_ids, so only the first event to claim it is delivered.
-  const deliver = async (message: InboundMessage) => {
-    if (!eventLog.claimMessage(message.eventId)) {
-      eventLog.setDisposition(message.eventId, "duplicate_message");
-      return;
-    }
-    await onMessage(message);
-  };
+  const deliver = (message: InboundMessage) =>
+    deliverMessage(message, { eventLog, onMessage });
 
   // Only DMs count as requests here. In channels the bot answers @-mentions,
   // which come through app_mention below.
@@ -142,6 +136,69 @@ export function registerInbound(
   });
 }
 
+// The same message can arrive as both `message` and `app_mention` under
+// different event_ids, or again from catch-up, so only the first event to claim
+// it is delivered.
+async function deliverMessage(
+  message: InboundMessage,
+  { eventLog, onMessage }: Pick<InboundOptions, "eventLog" | "onMessage">,
+): Promise<void> {
+  if (!eventLog.claimMessage(message.eventId)) {
+    eventLog.setDisposition(message.eventId, "duplicate_message");
+    return;
+  }
+  await onMessage(message);
+}
+
+export interface ReplayOptions extends InboundOptions {
+  botUserId: string;
+}
+
+/**
+ * Runs an event the gate recorded but never settled back through the same
+ * checks, from the fields the event log kept, and delivers it if it passes.
+ * The log doesn't keep a message's subtype or channel_type, so a DM is
+ * recognised by its D channel ID, and an edit or deletion fails the owner
+ * check because it has no top-level user.
+ */
+export async function replayEvent(
+  event: SlackEventRecord,
+  { ownerUserId, botUserId, onMessage, eventLog }: ReplayOptions,
+): Promise<void> {
+  const settle = (disposition: GateDisposition) =>
+    eventLog.setDisposition(event.eventId, disposition);
+  if (event.user === botUserId) return settle("dropped_self");
+  if (event.user !== ownerUserId) return settle("dropped_not_owner");
+  const { channel, ts, user } = event;
+  if (channel === null || ts === null) return settle("ignored");
+  const message = {
+    eventId: event.eventId,
+    channel,
+    ts,
+    threadTs: event.threadTs ?? ts,
+    user,
+  };
+  if (event.type === "app_mention") {
+    await deliverMessage(
+      {
+        ...message,
+        text: stripMention(event.text ?? "", botUserId),
+        via: "mention",
+      },
+      { eventLog, onMessage },
+    );
+    return;
+  }
+  if (event.type === "message" && channel.startsWith("D")) {
+    await deliverMessage(
+      { ...message, text: event.text ?? "", via: "dm" },
+      { eventLog, onMessage },
+    );
+    return;
+  }
+  settle("ignored");
+}
+
 type GateArgs = AnyMiddlewareArgs & AllMiddlewareArgs;
 
 function gateDisposition(
@@ -171,18 +228,16 @@ function describeEvent(eventId: string, event: object): SlackEventRecord {
   const item = readObject(event, "item");
   return {
     eventId,
-    type: readString(event, "type") ?? "unknown",
-    channel: readString(event, "channel") ?? readString(item, "channel"),
-    ts: readString(event, "ts") ?? readString(item, "ts"),
-    threadTs: readString(event, "thread_ts"),
-    user: readString(event, "user"),
-    text: readString(event, "text"),
+    type: readStringField(event, "type") ?? "unknown",
+    channel:
+      readStringField(event, "channel") ??
+      readStringField(item, "channel") ??
+      null,
+    ts: readStringField(event, "ts") ?? readStringField(item, "ts") ?? null,
+    threadTs: readStringField(event, "thread_ts") ?? null,
+    user: readStringField(event, "user") ?? null,
+    text: readStringField(event, "text") ?? null,
   };
-}
-
-function readString(source: object, key: string): string | null {
-  const value: unknown = Reflect.get(source, key);
-  return typeof value === "string" ? value : null;
 }
 
 function readObject(source: object, key: string): object {

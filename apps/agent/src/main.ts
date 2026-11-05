@@ -1,5 +1,10 @@
 import path from "node:path";
 import { createOutboxSender } from "@repo/core/outbox";
+import {
+  recoverAfterRestart,
+  type RecoveryReport,
+  takeRecoverySnapshot,
+} from "@repo/core/recovery";
 import { loadConfig, type Repo } from "@repo/core/repos";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
@@ -13,11 +18,33 @@ const describeChannels = (channelRepos: ReadonlyMap<string, Repo>): string =>
     .map(([channelId, repo]) => `${channelId} → ${repo.name}`)
     .join(", ") || "none mapped";
 
+const describeRecovery = ({
+  replayedEvents,
+  restartedTasks,
+  caughtUpMessages,
+  conversationsWithoutHistory,
+  failures,
+}: RecoveryReport): string =>
+  [
+    `replayed ${replayedEvents} unfinished event(s)`,
+    `told ${restartedTasks} running task(s) about the restart`,
+    `caught up on ${caughtUpMessages} missed message(s)`,
+    ...(conversationsWithoutHistory.length > 0
+      ? [`no history yet for ${conversationsWithoutHistory.join(", ")}`]
+      : []),
+    ...(failures > 0 ? [`${failures} failure(s), logged above`] : []),
+  ].join("; ");
+
 const main = async (): Promise<void> => {
   const environment = parseEnvironment(process.env);
   const channelRepos = await loadConfig(CONFIG_PATH);
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
+  const recoverySnapshot = takeRecoverySnapshot({
+    store,
+    ownerUserId: environment.slackOwnerId,
+    channels: [...channelRepos.keys()],
+  });
   const outboxSender = createOutboxSender({
     outbox: store.outbox,
     logger: console,
@@ -55,6 +82,14 @@ const main = async (): Promise<void> => {
   };
   process.once("SIGINT", disconnect);
   process.once("SIGTERM", disconnect);
+
+  const recovery = await recoverAfterRestart({
+    store,
+    slack,
+    snapshot: recoverySnapshot,
+    logger: console,
+  });
+  console.log(`superagent: recovery ${describeRecovery(recovery)}`);
 };
 
 main().catch((error: unknown) => {

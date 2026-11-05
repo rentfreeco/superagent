@@ -46,12 +46,15 @@ export interface EventStore {
   setDisposition(eventId: string, disposition: EventDisposition): void;
   unfinished(): StoredEvent[];
   latestTs(channel: string): string | undefined;
+  latestTsInThread(channel: string, threadTs: string): string | undefined;
+  directMessageChannels(user: string): string[];
 }
 
 const EVENT_COLUMNS =
   "event_id as eventId, type, channel, ts, thread_ts as threadTs, user, text, disposition, received_at as receivedAt";
 
 const latestTsSchema = z.object({ latestTs: z.string().nullable() });
+const channelSchema = z.object({ channel: z.string() });
 
 export const createEventStore = (
   database: DatabaseSync,
@@ -83,6 +86,15 @@ export const createEventStore = (
     `select max(ts) as latestTs from events
      where channel = :channel and type in ('message', 'app_mention')`,
   );
+  const selectLatestTsInThread = database.prepare(
+    `select max(ts) as latestTs from events
+     where channel = :channel and (ts = :threadTs or thread_ts = :threadTs)
+       and type in ('message', 'app_mention')`,
+  );
+  const selectDirectMessageChannels = database.prepare(
+    `select distinct channel from events
+     where channel like 'D%' and user = :user order by channel`,
+  );
 
   return {
     get: (eventId) => {
@@ -112,5 +124,12 @@ export const createEventStore = (
     latestTs: (channel) =>
       latestTsSchema.parse(selectLatestTs.get({ channel })).latestTs ??
       undefined,
+    latestTsInThread: (channel, threadTs) =>
+      latestTsSchema.parse(selectLatestTsInThread.get({ channel, threadTs }))
+        .latestTs ?? undefined,
+    directMessageChannels: (user) =>
+      selectDirectMessageChannels
+        .all({ user })
+        .map((row) => channelSchema.parse(row).channel),
   };
 };

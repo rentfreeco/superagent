@@ -43,6 +43,33 @@ describe("threads", () => {
     });
   });
 
+  it("lists the threads owned by tasks in the given states", () => {
+    const { store } = openTestStore();
+    const runningTask = newTask(store);
+    store.tasks.transition(runningTask.id, "running");
+    const doneTask = newTask(store);
+    store.tasks.transition(doneTask.id, "running");
+    store.tasks.transition(doneTask.id, "done");
+    store.threads.claim({ ...thread, taskId: runningTask.id });
+    store.threads.claim({
+      channel: "C0123ABCD",
+      threadTs: "200.000001",
+      taskId: doneTask.id,
+    });
+    store.threads.claim({
+      channel: "C0123ABCD",
+      threadTs: "300.000001",
+      taskId: null,
+    });
+
+    expect(
+      store.threads
+        .ownedByTasksIn(["running", "waiting"])
+        .map(({ threadTs, taskId }) => ({ threadTs, taskId })),
+    ).toEqual([{ threadTs: thread.threadTs, taskId: runningTask.id }]);
+    expect(store.threads.ownedByTasksIn([])).toEqual([]);
+  });
+
   it("never moves a thread from one task to another, or back to the router", () => {
     const { store } = openTestStore();
     const firstTask = newTask(store);

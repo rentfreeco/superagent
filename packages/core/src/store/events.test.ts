@@ -103,4 +103,46 @@ describe("events", () => {
     expect(store.events.latestTs("D0123ABCD")).toBe("100.000009");
     expect(store.events.latestTs("C0UNSEEN")).toBeUndefined();
   });
+
+  it("finds the latest message in one thread, counting the root and its replies", () => {
+    const { store } = openTestStore();
+    store.events.record(
+      ownerMessage({ eventId: "EvRoot", channel: "C0", ts: "100.000001" }),
+    );
+    store.events.record(
+      ownerMessage({
+        eventId: "EvReply",
+        channel: "C0",
+        ts: "100.000005",
+        threadTs: "100.000001",
+      }),
+    );
+    store.events.record(
+      ownerMessage({
+        eventId: "EvOtherThread",
+        channel: "C0",
+        ts: "100.000009",
+        threadTs: "100.000002",
+      }),
+    );
+
+    expect(store.events.latestTsInThread("C0", "100.000001")).toBe(
+      "100.000005",
+    );
+    expect(store.events.latestTsInThread("C0", "300.000000")).toBeUndefined();
+  });
+
+  it("lists the DM channels a user has written in", () => {
+    const { store } = openTestStore();
+    store.events.record(ownerMessage({ eventId: "Ev1", channel: "D0OWNER" }));
+    store.events.record(
+      ownerMessage({ eventId: "Ev2", channel: "D0OWNER", ts: "100.000002" }),
+    );
+    store.events.record(
+      ownerMessage({ eventId: "Ev3", channel: "D0SOMEONE", user: "U0SOMEONE" }),
+    );
+    store.events.record(ownerMessage({ eventId: "Ev4", channel: "C0CHANNEL" }));
+
+    expect(store.events.directMessageChannels("U0OWNER")).toEqual(["D0OWNER"]);
+  });
 });

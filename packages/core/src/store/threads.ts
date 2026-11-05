@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import type { TaskState } from "./tasks.ts";
 
 const threadOwnerSchema = z.object({
   channel: z.string(),
@@ -19,10 +20,11 @@ export interface ThreadClaim {
 export interface ThreadStore {
   owner(channel: string, threadTs: string): ThreadOwner | undefined;
   claim(claim: ThreadClaim): ThreadOwner;
+  ownedByTasksIn(states: readonly TaskState[]): ThreadOwner[];
 }
 
 const THREAD_COLUMNS =
-  "channel, thread_ts as threadTs, task_id as taskId, created_at as createdAt";
+  "threads.channel, threads.thread_ts as threadTs, threads.task_id as taskId, threads.created_at as createdAt";
 
 export const createThreadStore = (
   database: DatabaseSync,
@@ -52,6 +54,19 @@ export const createThreadStore = (
     claim: ({ channel, threadTs, taskId }) => {
       insertOrHandOff.run({ channel, threadTs, taskId, createdAt: now() });
       return threadOwnerSchema.parse(selectOwner.get({ channel, threadTs }));
+    },
+    ownedByTasksIn: (states) => {
+      if (states.length === 0) return [];
+      const placeholders = states.map(() => "?").join(", ");
+      return database
+        .prepare(
+          `select ${THREAD_COLUMNS} from threads
+           join tasks on tasks.id = threads.task_id
+           where tasks.state in (${placeholders})
+           order by threads.created_at, threads.channel, threads.thread_ts`,
+        )
+        .all(...states)
+        .map((row) => threadOwnerSchema.parse(row));
     },
   };
 };
