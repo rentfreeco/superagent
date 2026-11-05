@@ -85,9 +85,9 @@ packages/
 apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
-      main.ts                  startup: environment, config, store, a snapshot of unfinished
-                               events, connect, outbox sender, then recovery; disconnects and
-                               closes the store on SIGINT / SIGTERM
+      main.ts                  startup: environment, config, store, the recovery snapshot,
+                               connect, outbox sender, then recovery; disconnects and closes
+                               the store on SIGINT / SIGTERM
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
                                SUPERAGENT_DATA_DIR, checked with zod
       handle-message.ts        createMessageHandler: route, then in one transaction queue the
@@ -142,7 +142,7 @@ All state the service needs after a restart lives in `@repo/core/store`, one SQL
 - MUST: Every Slack post and reaction goes through `store.outbox`. Only the outbox sender calls `SlackGateway.post` or `react`.
 - MUST: Queue an outbox entry in the same transaction as the event disposition or row change that caused it, with a dedupe key built from that cause (`reply:<event_id>`, `report:<report_id>`), so handling the same thing twice queues one post.
 - MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any `StartTask`, must give the same result when it sees an event it may already have half-handled.
-- MUST: Snapshot `store.events.unfinished()` before connecting to Slack and replay only that snapshot. An event the live gate is still handling is also `received`, and replaying it would handle it twice.
+- MUST: Take the recovery snapshot (`takeRecoverySnapshot`) before connecting to Slack, and recover only from it. Once connected, live events are recorded, including the bot's own posts echoed back by Slack. An event the live gate is still handling is also `received`, so replaying it would handle it twice, and any newer event moves a conversation's latest ts past the messages catch-up has to read.
 - MUST: Feed anything read back from Slack history through the gate (`SlackGateway.catchUp`), never straight to the handler. The gate's per-message claim is what stops a caught-up message from being handled again when its live event was already handled.
 
 ## Slack

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { createOutboxSender } from "@repo/core/outbox";
-import { recoverAfterRestart, type RecoveryReport } from "@repo/core/recovery";
+import {
+  recoverAfterRestart,
+  type RecoveryReport,
+  takeRecoverySnapshot,
+} from "@repo/core/recovery";
 import { loadConfig, type Repo } from "@repo/core/repos";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
@@ -36,7 +40,11 @@ const main = async (): Promise<void> => {
   const channelRepos = await loadConfig(CONFIG_PATH);
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
-  const unfinishedEvents = store.events.unfinished();
+  const recoverySnapshot = takeRecoverySnapshot({
+    store,
+    ownerUserId: environment.slackOwnerId,
+    channels: [...channelRepos.keys()],
+  });
   const outboxSender = createOutboxSender({
     outbox: store.outbox,
     logger: console,
@@ -78,9 +86,7 @@ const main = async (): Promise<void> => {
   const recovery = await recoverAfterRestart({
     store,
     slack,
-    unfinishedEvents,
-    ownerUserId: environment.slackOwnerId,
-    channels: [...channelRepos.keys()],
+    snapshot: recoverySnapshot,
     logger: console,
   });
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);

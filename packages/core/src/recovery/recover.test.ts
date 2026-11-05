@@ -9,6 +9,7 @@ import {
   type RecoveryCatchUpResult,
   type RecoveryCatchUpTarget,
   type RecoverySlack,
+  takeRecoverySnapshot,
 } from "./recover.ts";
 
 const OWNER = "U0OWNER";
@@ -54,15 +55,61 @@ const setup = () => {
     recoverAfterRestart({
       store,
       slack,
-      unfinishedEvents: store.events.unfinished(),
-      ownerUserId: OWNER,
-      channels,
+      snapshot: takeRecoverySnapshot({ store, ownerUserId: OWNER, channels }),
       logger,
     });
   return { logger, recover, slack, store };
 };
 
 describe("recoverAfterRestart", () => {
+  it("works from the snapshot, so nothing recorded after connecting moves a starting point or adds a task", async () => {
+    const { logger, slack, store } = setup();
+    store.events.record(
+      ownerMessage({ eventId: "EvBeforeDowntime", ts: "100.000005" }),
+    );
+    store.events.setDisposition("EvBeforeDowntime", "replied");
+    const taskBeforeDowntime = createTaskIn(store, "running", "300.000001");
+    store.threads.claim({
+      channel: "C0MAPPED",
+      threadTs: taskBeforeDowntime.originTs,
+      taskId: taskBeforeDowntime.id,
+    });
+    const snapshot = takeRecoverySnapshot({
+      store,
+      ownerUserId: OWNER,
+      channels: [],
+    });
+
+    store.events.record(
+      ownerMessage({ eventId: "EvBotEcho", user: "U0BOT", ts: "100.000099" }),
+    );
+    store.events.record(
+      ownerMessage({
+        eventId: "EvLiveReply",
+        type: "app_mention",
+        channel: "C0MAPPED",
+        ts: "300.000099",
+        threadTs: "300.000001",
+      }),
+    );
+    const taskStartedAfterConnecting = createTaskIn(
+      store,
+      "running",
+      "400.000001",
+    );
+
+    await recoverAfterRestart({ store, slack, snapshot, logger });
+
+    expect(slack.catchUp.mock.calls.map(([target]) => target)).toEqual([
+      { channel: "D0OWNER", threadTs: null, oldest: "100.000005" },
+      { channel: "C0MAPPED", threadTs: "300.000001", oldest: "300.000001" },
+    ]);
+    expect(store.inputs.undelivered(taskStartedAfterConnecting.id)).toEqual([]);
+    expect(store.inputs.tasksWithUndelivered()).toEqual([
+      taskBeforeDowntime.id,
+    ]);
+  });
+
   it("replays the unfinished events in order, and keeps going past one that fails", async () => {
     const { logger, recover, slack, store } = setup();
     store.events.record(ownerMessage({ eventId: "EvFirst" }));

@@ -7,4 +7,7 @@ export {
   type RecoveryOptions,
   type RecoveryReport,
   type RecoverySlack,
+  type RecoverySnapshot,
+  type RecoverySnapshotOptions,
+  takeRecoverySnapshot,
 } from "./recover.ts";
