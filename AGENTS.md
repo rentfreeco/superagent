@@ -91,7 +91,7 @@ Run checks always before committing with:
 ```bash
 pnpm format
 pnpm lint
-pnpm check-types
+pnpm typecheck
 pnpm test
 ```
 
