@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./repos": "./src/repos/index.ts",
-    "./slack": "./src/slack/index.ts"
+    "./slack": "./src/slack/index.ts",
+    "./store": "./src/store/index.ts"
   },
   "scripts": {
     "lint": "eslint . --max-warnings 0",
