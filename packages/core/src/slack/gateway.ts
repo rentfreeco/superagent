@@ -1,11 +1,12 @@
 import { App, type LogLevel, webApi } from "@slack/bolt";
-import {
-  type InboundMessage,
-  type MessageHandler,
-  registerInbound,
-} from "./inbound.ts";
+import { type InboundMessage, registerInbound } from "./inbound.ts";
 import { postReply } from "./reply.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
+
+export type SlackMessageHandler = (
+  message: InboundMessage,
+  slack: SlackGateway,
+) => void | Promise<void>;
 
 export interface SlackGatewayOptions {
   /** Bot token (xoxb-…). */
@@ -14,7 +15,7 @@ export interface SlackGatewayOptions {
   appToken: string;
   /** The only Slack user the bot listens to. */
   ownerUserId: string;
-  onMessage: MessageHandler;
+  onMessage: SlackMessageHandler;
   logLevel?: LogLevel;
 }
 
@@ -56,9 +57,13 @@ export class SlackGateway {
       convoStore: false,
       logLevel,
     });
-    registerInbound(app, { ownerUserId, onMessage });
+    const gateway = new SlackGateway(app, identity);
+    registerInbound(app, {
+      ownerUserId,
+      onMessage: (message) => onMessage(message, gateway),
+    });
     await app.start();
-    return new SlackGateway(app, identity);
+    return gateway;
   }
 
   /** Reads a thread's full history from Slack. Nothing is cached, so each call reflects the thread as it is now. */

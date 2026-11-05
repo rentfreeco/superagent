@@ -2,12 +2,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expandHomeDirectory } from "../utils/expand-home-directory.ts";
 import { isGitCheckout } from "../utils/is-git-checkout.ts";
+import { pathExists } from "../utils/path-exists.ts";
 import { parseConfig, type Repo } from "./config.ts";
 
 export const loadConfig = async (
   configPath: string,
 ): Promise<ReadonlyMap<string, Repo>> => {
   const absoluteConfigPath = path.resolve(configPath);
+  if (!(await pathExists(absoluteConfigPath))) {
+    throw new Error(
+      `No superagent config at ${absoluteConfigPath}. Start from superagent.config.example.ts at the repository root.`,
+    );
+  }
   const configModule: { default?: unknown } = await import(
     pathToFileURL(absoluteConfigPath).href
   );

@@ -10,15 +10,17 @@ The bot's Socket Mode connection to Slack.
 import { SlackGateway } from "@repo/core/slack";
 
 const slack = await SlackGateway.connect({
-  botToken: process.env.SLACK_BOT_TOKEN!, // xoxb-…
-  appToken: process.env.SLACK_APP_TOKEN!, // xapp-…
-  ownerUserId: process.env.SLACK_OWNER_ID!, // U…
-  onMessage: async (message) => {
+  botToken, // xoxb-…
+  appToken, // xapp-…
+  ownerUserId, // U…
+  onMessage: async (message, slack) => {
     const history = await slack.fetchThread(message.channel, message.threadTs);
-    // hand off to the task runner
+    await slack.reply(message, "on it");
   },
 });
 ```
+
+`onMessage` gets the gateway as its second argument, so a handler never depends on `connect` having returned. `apps/agent` is the real wiring.
 
 What reaches `onMessage`:
 
@@ -46,7 +48,7 @@ import { loadConfig, routeMessage } from "@repo/core/repos";
 
 const channelRepos = await loadConfig("superagent.config.ts");
 
-// inside onMessage:
+// inside onMessage(message, slack):
 const route = routeMessage(channelRepos, message);
 if (route.kind === "reply") return slack.reply(message, route.text);
 // route.repo: { name, github, path, baseBranch }

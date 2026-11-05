@@ -86,4 +86,12 @@ describe("loadConfig", () => {
       /Invalid superagent config/,
     );
   });
+
+  it("points at the example when the config file doesn't exist", async () => {
+    await expect(
+      loadConfig(path.join(workspaceDirectory, "superagent.config.ts")),
+    ).rejects.toThrow(
+      /No superagent config at .*superagent\.config\.example\.ts/,
+    );
+  });
 });
