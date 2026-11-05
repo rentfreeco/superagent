@@ -13,7 +13,7 @@ export interface TaskRequest {
   store: HandlerStore;
 }
 
-export type StartTask = (request: TaskRequest) => void;
+export type StartTask = (request: TaskRequest) => undefined;
 
 export interface MessageHandlerOptions {
   channelRepos: ReadonlyMap<string, Repo>;
@@ -37,7 +37,12 @@ export const createMessageHandler =
         store.events.setDisposition(message.eventId, "replied");
         return;
       }
-      startTask({ message, repo: route.repo, store });
+      const started: unknown = startTask({ message, repo: route.repo, store });
+      if (started instanceof Promise) {
+        throw new Error(
+          "startTask returned a promise. It runs inside the handler's transaction, so it must be synchronous and only write rows.",
+        );
+      }
       store.events.setDisposition(message.eventId, "routed");
     });
     wakeOutbox();

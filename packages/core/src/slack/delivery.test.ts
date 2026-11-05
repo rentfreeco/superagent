@@ -178,19 +178,27 @@ describe("classifyDeliveryFailure", () => {
       "msg_too_long",
       "invalid_auth",
     ]) {
-      expect(classifyDeliveryFailure(slackPlatformError(code))).toBe(
-        "permanent",
-      );
+      expect(classifyDeliveryFailure(slackPlatformError(code))).toEqual({
+        kind: "permanent",
+      });
     }
   });
 
-  it("retries rate limits, Slack-side errors, and anything that isn't a Slack answer", () => {
-    expect(classifyDeliveryFailure(slackPlatformError("ratelimited"))).toBe(
-      "transient",
-    );
-    expect(classifyDeliveryFailure(slackPlatformError("internal_error"))).toBe(
-      "transient",
-    );
+  it("retries Slack-side errors and anything that isn't a Slack answer", () => {
+    for (const error of [
+      slackPlatformError("ratelimited"),
+      slackPlatformError("internal_error"),
+      new Error("socket hang up"),
+      "not even an error",
+    ]) {
+      expect(classifyDeliveryFailure(error)).toEqual({
+        kind: "transient",
+        retryAfterMs: undefined,
+      });
+    }
+  });
+
+  it("passes on how long a rate limit asks the bot to wait", () => {
     expect(
       classifyDeliveryFailure(
         Object.assign(new Error("rate limited"), {
@@ -198,10 +206,6 @@ describe("classifyDeliveryFailure", () => {
           retryAfter: 30,
         }),
       ),
-    ).toBe("transient");
-    expect(classifyDeliveryFailure(new Error("socket hang up"))).toBe(
-      "transient",
-    );
-    expect(classifyDeliveryFailure("not even an error")).toBe("transient");
+    ).toEqual({ kind: "transient", retryAfterMs: 30_000 });
   });
 });

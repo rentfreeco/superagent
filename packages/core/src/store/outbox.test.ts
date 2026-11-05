@@ -95,6 +95,22 @@ describe("outbox", () => {
     expect(store.outbox.pending()).toEqual([]);
   });
 
+  it("waits at least as long as asked, even when the backoff is shorter", () => {
+    const { store, clock } = openTestStore();
+    const entryId = store.outbox.enqueue(summaryPost)?.id ?? -1;
+
+    store.outbox.beginAttempt(entryId);
+    const askedToWait = store.outbox.markFailed(entryId, "ratelimited", 30_000);
+    expect(askedToWait.nextAttemptAt - clock.now).toBe(30_000);
+
+    clock.now = askedToWait.nextAttemptAt;
+    store.outbox.beginAttempt(entryId);
+    const backoffIsLonger = store.outbox.markFailed(entryId, "ratelimited", 1);
+    expect(backoffIsLonger.nextAttemptAt - clock.now).toBe(
+      OUTBOX_BASE_RETRY_DELAY_MS * 2,
+    );
+  });
+
   it("fails an entry at once when it can never be delivered", () => {
     const { store } = openTestStore();
     const entryId = store.outbox.enqueue(summaryPost)?.id ?? -1;

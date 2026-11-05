@@ -126,4 +126,19 @@ describe("createMessageHandler", () => {
     expect(store.events.get("Ev1")?.disposition).toBe("received");
     expect(wakeOutbox).not.toHaveBeenCalled();
   });
+
+  it("refuses a startTask that returns a promise, without settling the event", () => {
+    const laterWrite = Promise.withResolvers<void>();
+    // @ts-expect-error -- StartTask must be synchronous, so an async one must not type-check
+    const asyncStart: StartTask = async () => {
+      await laterWrite.promise;
+    };
+    const { queuedPosts, receive, store, wakeOutbox } = setup(asyncStart);
+
+    expect(() => receive(inboundMessage({}))).toThrow(/must be synchronous/);
+    expect(store.events.get("Ev1")?.disposition).toBe("received");
+    expect(queuedPosts()).toEqual([]);
+    expect(wakeOutbox).not.toHaveBeenCalled();
+    laterWrite.resolve();
+  });
 });

@@ -4,6 +4,7 @@ import { openTestStore } from "../store/open-test-store.ts";
 import {
   createOutboxSender,
   type OutboxDelivery,
+  type OutboxFailure,
   type OutboxPost,
 } from "./sender.ts";
 
@@ -31,7 +32,7 @@ const setup = () => {
     }),
     react: vi.fn(async () => undefined),
     findPost: vi.fn(async (): Promise<string | undefined> => undefined),
-    classifyFailure: vi.fn((): "transient" | "permanent" => "transient"),
+    classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
   } satisfies OutboxDelivery;
   const logger = { warn: vi.fn(), error: vi.fn() };
   const sender = createOutboxSender({
@@ -111,12 +112,30 @@ describe("outbox sender", () => {
     expect(store.outbox.pending()).toEqual([]);
   });
 
+  it("waits as long as a rate limit asks before retrying", async () => {
+    const { store, clock, delivery, sender } = setup();
+    const entryId = enqueuePost(store, "report:1");
+    delivery.post.mockRejectedValueOnce(new Error("rate limited"));
+    delivery.classifyFailure.mockReturnValueOnce({
+      kind: "transient",
+      retryAfterMs: 30_000,
+    });
+
+    sender.start(delivery);
+    await sender.drain();
+    await sender.stop();
+
+    expect((store.outbox.get(entryId)?.nextAttemptAt ?? 0) - clock.now).toBe(
+      30_000,
+    );
+  });
+
   it("gives up at once on a permanent failure and moves on to the thread's next post", async () => {
     const { store, delivery, logger, sender } = setup();
     const first = enqueuePost(store, "report:1");
     const second = enqueuePost(store, "report:2");
     delivery.post.mockRejectedValueOnce(new Error("not_in_channel"));
-    delivery.classifyFailure.mockReturnValueOnce("permanent");
+    delivery.classifyFailure.mockReturnValueOnce({ kind: "permanent" });
 
     sender.start(delivery);
     await sender.drain();
@@ -171,6 +190,23 @@ describe("outbox sender", () => {
     expect(delivery.findPost).toHaveBeenCalledOnce();
     expect(delivery.post).toHaveBeenCalledOnce();
     expect(store.outbox.get(entryId)?.status).toBe("sent");
+  });
+
+  it("doesn't start a post when stopped while checking an interrupted one", async () => {
+    const { store, delivery, sender } = setup();
+    const entryId = enqueuePost(store, "report:1");
+    store.outbox.beginAttempt(entryId);
+    const lookup = Promise.withResolvers<string | undefined>();
+    delivery.findPost.mockImplementationOnce(() => lookup.promise);
+
+    sender.start(delivery);
+    await vi.waitFor(() => expect(delivery.findPost).toHaveBeenCalledOnce());
+    const stopped = sender.stop();
+    lookup.resolve(undefined);
+    await stopped;
+
+    expect(delivery.post).not.toHaveBeenCalled();
+    expect(store.outbox.get(entryId)?.status).toBe("pending");
   });
 
   it("does nothing until started, and folds wake-ups during a drain into one more pass", async () => {

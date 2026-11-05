@@ -151,5 +151,6 @@ await outboxSender.stop(); // on shutdown: finishes the post in flight
 
 - **When it sends:** right away when woken, and on a one-second poll that also picks up retries once their backoff has passed. Only one pass runs at a time; a wake during a pass asks for one more.
 - **Order:** an entry waits while an earlier entry in the same thread is still pending, so a retry never reorders a conversation.
-- **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent.
+- **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry; a rate limit waits at least as long as Slack's `Retry-After` asks. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent.
 - **No double posts after a crash:** the attempt is counted before Slack is called, and each post carries its dedupe key in message metadata. Before posting an entry that was attempted before, the sender looks for the bot's post with that key in the thread, and records it instead of posting again.
+- **Stopping:** `stop()` lets a post already on its way finish, and starts nothing after that, including a post that was waiting on the duplicate check. An entry left that way stays pending and goes out after the next start.

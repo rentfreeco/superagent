@@ -23,7 +23,17 @@ export interface SlackPostQuery {
   postedAfter: number;
 }
 
-export type DeliveryFailure = "transient" | "permanent";
+export interface PermanentDeliveryFailure {
+  kind: "permanent";
+}
+
+export interface TransientDeliveryFailure {
+  kind: "transient";
+  retryAfterMs?: number;
+}
+
+export type DeliveryFailure =
+  PermanentDeliveryFailure | TransientDeliveryFailure;
 
 const TRANSIENT_PLATFORM_ERRORS = new Set([
   "ratelimited",
@@ -49,12 +59,25 @@ export const platformErrorCode = (error: unknown): string | undefined => {
   return error.data.error;
 };
 
+const retryAfterMs = (error: unknown): number | undefined => {
+  if (
+    !(error instanceof Error) ||
+    !("code" in error) ||
+    error.code !== webApi.ErrorCode.RateLimitedError ||
+    !("retryAfter" in error) ||
+    typeof error.retryAfter !== "number"
+  ) {
+    return undefined;
+  }
+  return error.retryAfter * 1_000;
+};
+
 export const classifyDeliveryFailure = (error: unknown): DeliveryFailure => {
   const code = platformErrorCode(error);
   if (code === undefined || TRANSIENT_PLATFORM_ERRORS.has(code)) {
-    return "transient";
+    return { kind: "transient", retryAfterMs: retryAfterMs(error) };
   }
-  return "permanent";
+  return { kind: "permanent" };
 };
 
 export const postMessage = async (

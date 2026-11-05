@@ -55,7 +55,7 @@ export interface OutboxStore {
   pending(): OutboxEntry[];
   beginAttempt(id: number): OutboxEntry;
   markSent(id: number, slackTs: string | null): void;
-  markFailed(id: number, error: string): OutboxEntry;
+  markFailed(id: number, error: string, minimumDelayMs?: number): OutboxEntry;
   markUndeliverable(id: number, error: string): OutboxEntry;
 }
 
@@ -108,7 +108,10 @@ export const createOutboxStore = (
     `update outbox set
        last_error = :error,
        status = case when attempts >= :maxAttempts then 'failed' else 'pending' end,
-       next_attempt_at = :now + min(:baseDelay << max(attempts - 1, 0), :maxDelay)
+       next_attempt_at = :now + max(
+         min(:baseDelay << max(attempts - 1, 0), :maxDelay),
+         :minimumDelay
+       )
      where id = :id and status = 'pending'
      returning ${OUTBOX_COLUMNS}`,
   );
@@ -148,7 +151,7 @@ export const createOutboxStore = (
     markSent: (id, slackTs) => {
       updateSent.run({ id, slackTs, now: now() });
     },
-    markFailed: (id, error) =>
+    markFailed: (id, error, minimumDelayMs = 0) =>
       requireUpdated(
         updateFailed.get({
           id,
@@ -157,6 +160,7 @@ export const createOutboxStore = (
           maxAttempts: OUTBOX_MAX_ATTEMPTS,
           baseDelay: OUTBOX_BASE_RETRY_DELAY_MS,
           maxDelay: OUTBOX_MAX_RETRY_DELAY_MS,
+          minimumDelay: minimumDelayMs,
         }),
         id,
       ),

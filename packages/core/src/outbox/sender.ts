@@ -21,11 +21,22 @@ export interface OutboxPostQuery {
   postedAfter: number;
 }
 
+export interface PermanentOutboxFailure {
+  kind: "permanent";
+}
+
+export interface TransientOutboxFailure {
+  kind: "transient";
+  retryAfterMs?: number;
+}
+
+export type OutboxFailure = PermanentOutboxFailure | TransientOutboxFailure;
+
 export interface OutboxDelivery {
   post(post: OutboxPost): Promise<string>;
   react(reaction: OutboxReaction): Promise<void>;
   findPost(query: OutboxPostQuery): Promise<string | undefined>;
-  classifyFailure(error: unknown): "transient" | "permanent";
+  classifyFailure(error: unknown): OutboxFailure;
 }
 
 export interface OutboxLogger {
@@ -89,19 +100,24 @@ export const createOutboxSender = ({
               postedAfter: attempt.createdAt,
             })
           : undefined;
+      if (earlierPostTs !== undefined) {
+        outbox.markSent(attempt.id, earlierPostTs);
+        return;
+      }
+      if (activeDelivery === undefined) return;
       outbox.markSent(
         attempt.id,
-        earlierPostTs ??
-          (await delivery.post({ ...target, text: attempt.message.text })),
+        await delivery.post({ ...target, text: attempt.message.text }),
       );
     } catch (error) {
       const reason = describeError(error);
-      if (delivery.classifyFailure(error) === "permanent") {
+      const failure = delivery.classifyFailure(error);
+      if (failure.kind === "permanent") {
         outbox.markUndeliverable(attempt.id, reason);
         logger.error(`outbox: gave up on ${attempt.dedupeKey}: ${reason}`);
         return;
       }
-      const retry = outbox.markFailed(attempt.id, reason);
+      const retry = outbox.markFailed(attempt.id, reason, failure.retryAfterMs);
       if (retry.status === "failed") {
         logger.error(
           `outbox: gave up on ${attempt.dedupeKey} after ${retry.attempts} attempts: ${reason}`,

@@ -93,7 +93,7 @@ superagent.config.example.ts   the committed example; the real superagent.config
 - A task is keyed by `channel` + `threadTs`. `threadTs` is the thread root, so follow-ups in a thread land on the same task.
 - MUST: Decide a request's repo with `routeMessage` before any work starts. A message with no repo gets the route's reply, never a guessed repo.
 - MUST: Keep `apps/agent` to wiring: reading the environment, connecting, and passing messages to `core`. Logic that could be tested without a process belongs in `@repo/core`.
-- New work for a routed request plugs in as a `StartTask` (`apps/agent/src/handle-message.ts`), replacing `acknowledgeTask`. A `StartTask` is synchronous and only writes rows, inside the handler's transaction; whatever acts on those rows runs in its own loop, as the outbox sender does.
+- New work for a routed request plugs in as a `StartTask` (`apps/agent/src/handle-message.ts`), replacing `acknowledgeTask`. A `StartTask` is synchronous and only writes rows, inside the handler's transaction; whatever acts on those rows runs in its own loop, as the outbox sender does. Its type returns `undefined`, so an `async` one doesn't compile, and the handler also rolls back if one returns a promise anyway.
 
 ## TypeScript and Node
 
