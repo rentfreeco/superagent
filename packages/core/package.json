@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./outbox": "./src/outbox/index.ts",
+    "./recovery": "./src/recovery/index.ts",
     "./repos": "./src/repos/index.ts",
     "./slack": "./src/slack/index.ts",
     "./store": "./src/store/index.ts"

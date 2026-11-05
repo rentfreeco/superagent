@@ -44,6 +44,8 @@ Every event is acked as soon as it arrives (Bolt does this before any middleware
 
 The gateway's `post`, `react`, `findPost`, and `classifyFailure` exist for the outbox sender, which is the only thing that posts. They use their own Slack client, with no built-in retries, rate limits reported as errors, and a 10-second timeout, so a stuck call can't hold up the queue and the outbox's backoff is the only retry.
 
+`replay` and `catchUp` exist for restart recovery (`@repo/core/recovery`). `replay` runs an event the gate recorded but never settled back through the gate's checks. `catchUp` reads a channel or thread after a given ts and feeds the owner's missed messages through the real gate, with Bolt's `processEvent`, as if they had just arrived.
+
 ### Slack app setup
 
 1. Create an app at api.slack.com/apps → **From a manifest**, and paste [`slack-app-manifest.json`](./slack-app-manifest.json).
@@ -154,3 +156,28 @@ await outboxSender.stop(); // on shutdown: finishes the post in flight
 - **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry; a rate limit waits at least as long as Slack's `Retry-After` asks. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent.
 - **No double posts after a crash:** the attempt is counted before Slack is called, and each post carries its dedupe key in message metadata. Before posting an entry that was attempted before, the sender looks for the bot's post with that key in the thread, and records it instead of posting again.
 - **Stopping:** `stop()` lets a post already on its way finish, and starts nothing after that, including a post that was waiting on the duplicate check. An entry left that way stays pending and goes out after the next start.
+
+## `@repo/core/recovery`
+
+What runs once on every start, so a restart loses nothing. `apps/agent` calls it after connecting to Slack and starting the outbox sender, which by then is already sending whatever the outbox still holds.
+
+```ts
+import { recoverAfterRestart } from "@repo/core/recovery";
+
+const unfinishedEvents = store.events.unfinished(); // before connecting
+// ... connect, start the outbox sender ...
+const report = await recoverAfterRestart({
+  store,
+  slack, // the gateway: replay and catchUp
+  unfinishedEvents,
+  ownerUserId,
+  channels: [...channelRepos.keys()],
+  logger: console,
+});
+```
+
+1. **Unfinished events.** Each event the snapshot still has as `received` goes back through the gate's checks, then to the message handler. That covers a crash while handling a message and a crash inside the gate. The snapshot is taken before connecting, so an event the live gate is handling right now can't be replayed by mistake.
+2. **Running tasks.** Each gets a `system` input saying the service restarted, for the task runner to resume it with.
+3. **Catch-up.** For your DM channel, every mapped channel, and every open task's thread, it reads what was sent after the latest ts the store has for it, and feeds your messages through the real gate as synthetic events (`catchup:<channel>:<ts>`). In channels only messages that mention the bot count, as they would live. The gate's per-message claim skips anything already handled.
+
+A channel the store has no events for has no starting point, so it is skipped and listed in the report. Channel history only holds top-level messages, so thread replies are caught up only in open task threads. A failure anywhere is logged and counted, and recovery carries on with the next item.

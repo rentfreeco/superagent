@@ -9,7 +9,7 @@ The superagent bot process. It reads its settings, loads the repo config, connec
 3. Copy `superagent.config.example.ts` at the repository root to `superagent.config.ts` and map your channels.
 4. From the repository root, run `pnpm dev`, which restarts the bot when a source file changes, or `pnpm --filter agent start` to run it once.
 
-On startup it opens the store at `$SUPERAGENT_DATA_DIR/state.db` (`~/.superagent/state.db` unless set), connects, starts the outbox sender, then prints the bot's user ID, the mapped channels, and the store's path. `Ctrl+C` lets the sender finish the post in flight, disconnects from Slack, and closes the store before exiting.
+On startup it opens the store at `$SUPERAGENT_DATA_DIR/state.db` (`~/.superagent/state.db` unless set), notes which events were left unfinished, connects, starts the outbox sender, and prints the bot's user ID, the mapped channels, and the store's path. Then it runs restart recovery: it replays the unfinished events, tells running tasks about the restart, and catches up on what you sent while it was down, and it prints what it did. `Ctrl+C` lets the sender finish the post in flight, disconnects from Slack, and closes the store before exiting.
 
 ## What it does with a message
 

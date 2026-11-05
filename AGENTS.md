@@ -42,11 +42,16 @@ packages/
         index.ts               the module's public exports
       slack/                   @repo/core/slack: the bot's Socket Mode connection
         gateway.ts             SlackGateway: connect (auth.test, then Bolt App, then start),
-                               fetchThread, post, react, findPost, classifyFailure, close
+                               fetchThread, post, react, findPost, classifyFailure, replay,
+                               catchUp, close
         inbound.ts             the global gate (record the event once, then self, then owner,
                                then handled types) and the DM / app_mention listeners that
-                               claim the message and build InboundMessage; EventLog is the
-                               interface the store's events table satisfies
+                               claim the message and build InboundMessage; replayEvent runs a
+                               recorded but unsettled event back through the same checks;
+                               EventLog is the interface the store's events table satisfies
+        catch-up.ts            catchUpConversation: read a channel or thread after a ts and feed
+                               the owner's missed messages through the real gate, as synthetic
+                               events with catchup:<channel>:<ts> IDs
         thread.ts              fetchThread: conversations.replies with cursor pagination
         delivery.ts            postMessage (dedupe key in message metadata), addReaction,
                                findOwnPost, and which Slack errors are permanent
@@ -67,6 +72,10 @@ packages/
         sender.ts              createOutboxSender: one pass at a time, woken on enqueue and
                                polled every second; checks before re-posting; stops cleanly
         index.ts               the module's public exports
+      recovery/                @repo/core/recovery: what runs once on every start
+        recover.ts             recoverAfterRestart: replay unfinished events, tell running
+                               tasks about the restart, catch up on what was sent while down
+        index.ts               the module's public exports
       utils/                   small helpers, one per file
       constants.ts             magic numbers: SQLite busy timeout, outbox backoff and polling,
                                Slack delivery timeout, task IDs
@@ -76,8 +85,9 @@ packages/
 apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
-      main.ts                  startup: environment, config, store, then connect; disconnects
-                               and closes the store on SIGINT / SIGTERM
+      main.ts                  startup: environment, config, store, a snapshot of unfinished
+                               events, connect, outbox sender, then recovery; disconnects and
+                               closes the store on SIGINT / SIGTERM
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
                                SUPERAGENT_DATA_DIR, checked with zod
       handle-message.ts        createMessageHandler: route, then in one transaction queue the
@@ -131,6 +141,9 @@ All state the service needs after a restart lives in `@repo/core/store`, one SQL
 - NEVER: open the same store from two processes, or keep it on a network filesystem. `openStore` refuses to run unless SQLite really switched to write-ahead logging.
 - MUST: Every Slack post and reaction goes through `store.outbox`. Only the outbox sender calls `SlackGateway.post` or `react`.
 - MUST: Queue an outbox entry in the same transaction as the event disposition or row change that caused it, with a dedupe key built from that cause (`reply:<event_id>`, `report:<report_id>`), so handling the same thing twice queues one post.
+- MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any `StartTask`, must give the same result when it sees an event it may already have half-handled.
+- MUST: Snapshot `store.events.unfinished()` before connecting to Slack and replay only that snapshot. An event the live gate is still handling is also `received`, and replaying it would handle it twice.
+- MUST: Feed anything read back from Slack history through the gate (`SlackGateway.catchUp`), never straight to the handler. The gate's per-message claim is what stops a caught-up message from being handled again when its live event was already handled.
 
 ## Slack
 

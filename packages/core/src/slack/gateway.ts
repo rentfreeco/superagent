@@ -11,9 +11,16 @@ import {
   type SlackReaction,
 } from "./delivery.ts";
 import {
+  type CatchUpResult,
+  type CatchUpTarget,
+  catchUpConversation,
+} from "./catch-up.ts";
+import {
   type EventLog,
   type InboundMessage,
   registerInbound,
+  replayEvent,
+  type SlackEventRecord,
 } from "./inbound.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
 
@@ -35,23 +42,37 @@ export interface SlackGatewayOptions {
   logLevel?: LogLevel;
 }
 
+interface GatewayParts {
+  app: App;
+  identity: BotIdentity;
+  teamId: string;
+  deliveryClient: webApi.WebClient;
+  ownerUserId: string;
+  eventLog: EventLog;
+  onMessage: SlackMessageHandler;
+}
+
 /** The bot's Socket Mode connection to Slack. */
 export class SlackGateway {
   readonly app: App;
   readonly identity: BotIdentity;
-  // Delivery fails fast and leaves retrying to the outbox. The default client
-  // retries for about half an hour and never times out, which would stall
-  // every entry queued behind one post.
+  readonly #teamId: string;
+  // Delivery and catch-up fail fast and leave retrying to their callers. The
+  // default client retries for about half an hour and never times out, which
+  // would stall every entry queued behind one post.
   readonly #deliveryClient: webApi.WebClient;
+  readonly #ownerUserId: string;
+  readonly #eventLog: EventLog;
+  readonly #onMessage: SlackMessageHandler;
 
-  private constructor(
-    app: App,
-    identity: BotIdentity,
-    deliveryClient: webApi.WebClient,
-  ) {
-    this.app = app;
-    this.identity = identity;
-    this.#deliveryClient = deliveryClient;
+  private constructor(parts: GatewayParts) {
+    this.app = parts.app;
+    this.identity = parts.identity;
+    this.#teamId = parts.teamId;
+    this.#deliveryClient = parts.deliveryClient;
+    this.#ownerUserId = parts.ownerUserId;
+    this.#eventLog = parts.eventLog;
+    this.#onMessage = parts.onMessage;
   }
 
   /** Resolves the bot's identity, installs the inbound pipeline and opens the connection. */
@@ -89,7 +110,15 @@ export class SlackGateway {
       timeout: SLACK_DELIVERY_TIMEOUT_MS,
       logLevel,
     });
-    const gateway = new SlackGateway(app, identity, deliveryClient);
+    const gateway = new SlackGateway({
+      app,
+      identity,
+      teamId: auth.team_id ?? "",
+      deliveryClient,
+      ownerUserId,
+      eventLog,
+      onMessage,
+    });
     registerInbound(app, {
       ownerUserId,
       onMessage: (message) => onMessage(message, gateway),
@@ -120,6 +149,30 @@ export class SlackGateway {
 
   classifyFailure(error: unknown): DeliveryFailure {
     return classifyDeliveryFailure(error);
+  }
+
+  /** Runs an event the gate recorded but never settled back through the gate's checks, then the message handler. */
+  replay(event: SlackEventRecord): Promise<void> {
+    return replayEvent(event, {
+      ownerUserId: this.#ownerUserId,
+      botUserId: this.identity.userId,
+      eventLog: this.#eventLog,
+      onMessage: (message) => this.#onMessage(message, this),
+    });
+  }
+
+  /** Reads what the owner sent in a channel or thread after `oldest`, and feeds it through the gate as if it had just arrived. */
+  catchUp(target: CatchUpTarget): Promise<CatchUpResult> {
+    return catchUpConversation(
+      {
+        client: this.#deliveryClient,
+        app: this.app,
+        ownerUserId: this.#ownerUserId,
+        botUserId: this.identity.userId,
+        teamId: this.#teamId,
+      },
+      target,
+    );
   }
 
   async close(): Promise<void> {

@@ -118,6 +118,8 @@ Everything the bot must remember across a restart, from which Slack events it ha
 - **Back it up:** `sqlite3 ~/.superagent/state.db ".backup state-backup.db"`. Copying `state.db` on its own while the bot runs can miss writes that are still in `state.db-wal`.
 - **Start over:** stop the bot, then delete `state.db`, `state.db-wal`, and `state.db-shm`.
 
+Restarting is safe. On start the bot sends anything still in the outbox, replays events it never finished, and catches up on what you sent while it was down: your DM, each mapped channel, and each open task's thread, from the last message it recorded there. A channel it has no record of yet is skipped, and the startup log says so.
+
 Keep the store on a local disk, such as a Docker named volume, and run one bot per store. The bot refuses to start if SQLite can't switch the file to write-ahead logging, which happens on network filesystems.
 
 ### Repository layout
