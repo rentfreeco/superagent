@@ -1,3 +1,5 @@
+import type { Repo } from "@repo/core/repos";
+import { decideStartTask } from "@repo/core/router";
 import type { InboundMessage } from "@repo/core/slack";
 import { IN_MEMORY_STORE, openStore } from "@repo/core/store";
 import { describe, expect, it, vi } from "vitest";
@@ -103,6 +105,51 @@ describe("createMessageHandler", () => {
     receive(message);
 
     expect(store.candidates.undecided()).toHaveLength(1);
+  });
+
+  it("hands a message queued in a thread that a task then took over to that task once, even if it is replayed", () => {
+    const superagentRepo: Repo = {
+      name: "superagent",
+      github: "pakgin/superagent",
+      path: "/code/superagent",
+      baseBranch: "main",
+    };
+    const { receive, store } = setup();
+    const request = inboundMessage({});
+    const followUp = inboundMessage({
+      eventId: "Ev2",
+      ts: "100.000002",
+      text: "also fix the lint",
+    });
+    receive(request);
+    receive(followUp);
+    const [requestCandidate] = store.candidates.undecided();
+
+    decideStartTask(
+      {
+        store,
+        repos: new Map([["superagent", superagentRepo]]),
+        decidedBy: "router",
+      },
+      {
+        candidateId: requestCandidate?.id ?? 0,
+        repo: "superagent",
+        reason: "A request.",
+      },
+    );
+    const unfinishedAfterStart = store.events
+      .unfinished()
+      .map(({ eventId }) => eventId);
+    receive(followUp);
+
+    const [task] = store.tasks.withState(["queued"]);
+    expect(unfinishedAfterStart).toEqual([]);
+    expect(store.candidates.undecided()).toEqual([]);
+    expect(store.inputs.unread(task?.id ?? "").map(({ ref }) => ref)).toEqual([
+      "Ev1",
+      "Ev2",
+    ]);
+    expect(store.events.get("Ev2")?.disposition).toBe("task_input");
   });
 
   it("gives a message in a task's thread to that task, not the router", () => {
