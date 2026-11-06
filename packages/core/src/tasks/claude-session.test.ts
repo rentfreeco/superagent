@@ -3,15 +3,17 @@ import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
+import type {
+  AgentConversation,
+  ConversationRequest,
+  StartConversation,
+} from "./agent-session.ts";
 import {
-  type ConversationRequest,
   createAckTool,
   createClaudeSessionStarter,
   createReadThreadTool,
   createReportTool,
   WORKER_SERVER_NAME,
-  type StartConversation,
-  type WorkerConversation,
 } from "./claude-session.ts";
 import type { ReportOutcome, WorkerReport } from "./record-report.ts";
 
@@ -66,7 +68,7 @@ const setup = ({
 }: {
   task?: Task;
   conversationMessages?: ReturnType<typeof createAsyncQueue<unknown>>;
-  iterate?: WorkerConversation[typeof Symbol.asyncIterator];
+  iterate?: AgentConversation[typeof Symbol.asyncIterator];
   sandbox?: boolean;
 } = {}) => {
   const requests: ConversationRequest[] = [];

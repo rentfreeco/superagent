@@ -3,12 +3,20 @@ export {
   type AcknowledgeMessagesOptions,
 } from "./acknowledge-messages.ts";
 export {
-  type ClaudeSessionStarterOptions,
+  type AgentConversation,
+  type AgentPrompt,
+  type AgentSession,
+  type AgentSessionEvents,
+  type AgentTurn,
   type ConversationRequest,
-  createClaudeSessionStarter,
   type StartConversation,
+  startAgentSession,
+} from "./agent-session.ts";
+export {
+  agentEnvironment,
+  type ClaudeSessionStarterOptions,
+  createClaudeSessionStarter,
   type StartWorkerSession,
-  type WorkerConversation,
   type WorkerSession,
   type WorkerSessionEvents,
   type WorkerSessionOptions,

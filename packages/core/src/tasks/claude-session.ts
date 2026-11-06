@@ -1,12 +1,9 @@
-import { randomUUID, type UUID } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
   createSdkMcpServer,
-  type Options,
   query,
   type SandboxSettings,
-  type SDKUserMessage,
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -14,8 +11,12 @@ import { WORKER_EFFORT, WORKER_MODEL } from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
-import { createAsyncQueue } from "../utils/create-async-queue.ts";
 import { describeError } from "../utils/describe-error.ts";
+import {
+  type AgentPrompt,
+  type StartConversation,
+  startAgentSession,
+} from "./agent-session.ts";
 import type { Worktree } from "./prepare-worktree.ts";
 import {
   REPORT_STATES,
@@ -59,20 +60,6 @@ export interface WorkerSession {
 export type StartWorkerSession = (
   options: WorkerSessionOptions,
 ) => WorkerSession;
-
-export interface WorkerConversation extends AsyncIterable<unknown> {
-  interrupt(): Promise<unknown>;
-  close(): void;
-}
-
-export interface ConversationRequest {
-  prompt: AsyncIterable<SDKUserMessage>;
-  options: Options;
-}
-
-export type StartConversation = (
-  request: ConversationRequest,
-) => WorkerConversation;
 
 export interface ClaudeSessionStarterOptions {
   startConversation?: StartConversation;
@@ -149,34 +136,12 @@ const WORKER_SANDBOX_DOMAINS = [
   "*.crates.io",
 ];
 
-const sessionInitSchema = z.object({
-  type: z.literal("system"),
-  subtype: z.literal("init"),
-  session_id: z.string(),
+const toAgentPrompt = ({ id, source, text }: TaskInput): AgentPrompt => ({
+  id,
+  text: source === "slack" ? text : `[${source}] ${text}`,
 });
 
-const turnResultSchema = z.object({
-  type: z.literal("result"),
-  subtype: z.string(),
-  is_error: z.boolean(),
-  result: z.string().optional(),
-  errors: z.array(z.string()).optional(),
-  user_message_uuid: z.string().optional(),
-  user_message_uuids: z.array(z.string()).optional(),
-  queued_turn_count: z.number().optional(),
-});
-
-const toPrompt = ({ source, text }: TaskInput, uuid: UUID): SDKUserMessage => ({
-  type: "user",
-  message: {
-    role: "user",
-    content: source === "slack" ? text : `[${source}] ${text}`,
-  },
-  parent_tool_use_id: null,
-  uuid,
-});
-
-const workerEnvironment = (
+export const agentEnvironment = (
   environment: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> =>
   Object.fromEntries(
@@ -268,53 +233,8 @@ export const createClaudeSessionStarter =
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
   ({ task, repo, worktree, inputs, ack, readThread, report, events }) => {
     const gitDirectory = path.join(repo.path, ".git");
-    const prompts = createAsyncQueue<SDKUserMessage>();
-    const unreadInputIds = new Map<string, number>();
-
-    const send = (nextInputs: readonly TaskInput[]): void => {
-      for (const input of nextInputs) {
-        const uuid = randomUUID();
-        unreadInputIds.set(uuid, input.id);
-        prompts.push(toPrompt(input, uuid));
-      }
-    };
-
-    const takeReadInputIds = (consumedUuids: readonly string[]): number[] =>
-      consumedUuids.flatMap((uuid) => {
-        const inputId = unreadInputIds.get(uuid);
-        unreadInputIds.delete(uuid);
-        return inputId === undefined ? [] : [inputId];
-      });
-
-    const handleMessage = (message: unknown): void => {
-      const init = sessionInitSchema.safeParse(message);
-      if (init.success) {
-        events.onSessionId(init.data.session_id);
-        return;
-      }
-      const result = turnResultSchema.safeParse(message);
-      if (!result.success) return;
-      const turn = result.data;
-      const consumedUuids =
-        turn.user_message_uuids ??
-        (turn.user_message_uuid === undefined
-          ? [...unreadInputIds.keys()]
-          : [turn.user_message_uuid]);
-      events.onTurnEnd({
-        readInputIds: takeReadInputIds(consumedUuids),
-        isError: turn.is_error || turn.subtype !== "success",
-        resultText:
-          turn.subtype === "success"
-            ? (turn.result ?? "")
-            : (turn.errors ?? []).join("\n"),
-        isIdle:
-          unreadInputIds.size === 0 && (turn.queued_turn_count ?? 0) === 0,
-      });
-    };
-
-    send(inputs);
-    const conversation = startConversation({
-      prompt: prompts,
+    const session = startAgentSession({
+      startConversation,
       options: {
         cwd: worktree.path,
         resume: task.sessionId ?? undefined,
@@ -355,33 +275,22 @@ export const createClaudeSessionStarter =
             ],
           }),
         },
-        env: workerEnvironment(environment),
+        env: agentEnvironment(environment),
         title: task.title,
+      },
+      prompts: inputs.map(toAgentPrompt),
+      events: {
+        onSessionId: events.onSessionId,
+        onTurnEnd: ({ readIds, ...turn }) =>
+          events.onTurnEnd({ ...turn, readInputIds: readIds }),
+        onEnd: events.onEnd,
       },
     });
 
-    const consume = async (): Promise<unknown> => {
-      try {
-        for await (const message of conversation) handleMessage(message);
-        return undefined;
-      } catch (error) {
-        return error;
-      } finally {
-        prompts.end();
-        conversation.close();
-      }
-    };
-    void consume().then(events.onEnd);
-
     return {
-      send,
-      interrupt: async () => {
-        await conversation.interrupt();
-      },
-      end: prompts.end,
-      close: () => {
-        prompts.end();
-        conversation.close();
-      },
+      send: (nextInputs) => session.send(nextInputs.map(toAgentPrompt)),
+      interrupt: session.interrupt,
+      end: session.end,
+      close: session.close,
     };
   };
