@@ -211,6 +211,125 @@ describe("decisions", () => {
   });
 });
 
+describe("messages waiting in the thread a new task takes over", () => {
+  it("passes them to the task in the same transaction, so restart recovery and the router leave them be", () => {
+    const { context, queue, queuedPosts, store } = setup();
+    const first = queue({ channel: "C0MAPPED", via: "mention" });
+    const later = queue({
+      eventId: "Ev2",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: "100.000001",
+      text: "also fix the lint",
+      via: "mention",
+    });
+    const elsewhere = queue({
+      eventId: "EvElsewhere",
+      channel: "C0MAPPED",
+      ts: "200.000001",
+      threadTs: "200.000001",
+      text: "update the README",
+      via: "mention",
+    });
+
+    const started = decideStartTask(context, {
+      candidateId: first.id,
+      repo: "superagent",
+      reason: "A request.",
+    });
+
+    const [task] = store.tasks.withState(["queued"]);
+    expect(started.reply).toBe(
+      `Started task ${task?.id} in superagent, and passed it the 1 later message(s) waiting in its thread.`,
+    );
+    expect(
+      store.inputs
+        .unread(task?.id ?? "")
+        .map(({ ref, text }) => ({ ref, text })),
+    ).toEqual([
+      { ref: "EvDm", text: "fix the flaky test in superagent" },
+      { ref: "Ev2", text: "also fix the lint" },
+    ]);
+    expect(store.decisions.forCandidate(later.id)).toMatchObject({
+      outcome: "attach",
+      taskId: task?.id,
+      decidedBy: "router",
+    });
+    expect(store.candidates.get(elsewhere.id)?.decidedAt).toBeNull();
+    expect(store.events.unfinished().map(({ eventId }) => eventId)).toEqual([
+      "EvElsewhere",
+    ]);
+    expect(queuedPosts()).toEqual([]);
+    expect(
+      decideStartTask(context, {
+        candidateId: later.id,
+        repo: "superagent",
+        reason: "Another request.",
+      }).reply,
+    ).toBe(`Candidate ${later.id} is already decided.`);
+  });
+
+  it("does the same when the channel map decides, and stops the task for a waiting stop", () => {
+    const { context, queue, store } = setup();
+    const first = queue({ channel: "C0MAPPED", via: "mention" });
+    queue({
+      eventId: "Ev2",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: "100.000001",
+      text: "stop",
+      via: "mention",
+    });
+
+    decideByChannelMap(
+      { ...context, channelRepos: new Map([["C0MAPPED", superagentRepo]]) },
+      first,
+    );
+
+    const [task] = store.tasks.withState(["stopped"]);
+    expect(task).toBeDefined();
+    expect(store.events.get("Ev2")?.disposition).toBe("stopped_task");
+  });
+
+  it("leaves a message another task handed back alone", () => {
+    const { context, queue, store } = setup();
+    const first = queue({ channel: "C0MAPPED", via: "mention" });
+    store.events.record({
+      eventId: "EvHandedBack",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: "100.000001",
+      user: "U0OWNER",
+      text: "what's on my calendar?",
+    });
+    const handedBack = store.candidates.add({
+      ...message({
+        eventId: "EvHandedBack",
+        channel: "C0MAPPED",
+        ts: "100.000002",
+        threadTs: "100.000001",
+        via: "thread",
+      }),
+      handedBackBy: store.tasks.create({
+        title: "Earlier",
+        repo: "superagent",
+        originChannel: "C0MAPPED",
+        originTs: "50.000001",
+      }).id,
+      handBackReason: "Not about this task.",
+    });
+
+    decideStartTask(context, {
+      candidateId: first.id,
+      repo: "superagent",
+      reason: "A request.",
+    });
+
+    expect(store.candidates.get(handedBack?.id ?? 0)?.decidedAt).toBeNull();
+  });
+});
+
 describe("decisions for a handed-back message", () => {
   const handBack = (
     store: ReturnType<typeof setup>["store"],

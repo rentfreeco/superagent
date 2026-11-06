@@ -99,8 +99,15 @@ export const createRouter = ({
 
   const fallBack = (candidates: readonly Candidate[]): void => {
     for (const candidate of candidates) {
-      decideByChannelMap({ store, repos, channelRepos }, candidate);
-      logger.info(`router: the channel map decided candidate ${candidate.id}`);
+      const outcome = decideByChannelMap(
+        { store, repos, channelRepos },
+        candidate,
+      );
+      if (outcome.isAccepted) {
+        logger.info(
+          `router: the channel map decided candidate ${candidate.id}`,
+        );
+      }
     }
     if (candidates.length > 0) wakeWorkers();
   };

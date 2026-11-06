@@ -2,6 +2,7 @@ import { TASK_TITLE_MAX_LENGTH } from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import type { InboundMessage } from "../slack/inbound.ts";
 import type { Store } from "../store/open-store.ts";
+import type { Task } from "../store/tasks.ts";
 import { truncateText } from "../utils/truncate-text.ts";
 
 export interface TaskRequestStore extends Pick<
@@ -34,7 +35,7 @@ export const startTask = ({
   repo,
   store,
   title,
-}: TaskRequest): undefined => {
+}: TaskRequest): Task => {
   const task = store.tasks.create({
     title: title?.trim()
       ? truncateText(title.trim(), TASK_TITLE_MAX_LENGTH)
@@ -59,4 +60,5 @@ export const startTask = ({
     ref: message.eventId,
     text: message.text,
   });
+  return task;
 };

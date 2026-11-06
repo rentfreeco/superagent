@@ -6,6 +6,7 @@ import type { EventDisposition } from "../store/events.ts";
 import type { Store } from "../store/open-store.ts";
 import { startTask } from "../tasks/start-task.ts";
 import { stopTask } from "../tasks/stop-task.ts";
+import { takeFollowUp } from "../tasks/take-follow-up.ts";
 import type { ToolOutcome } from "../tasks/tool-outcome.ts";
 
 export interface DecisionContext {
@@ -98,6 +99,43 @@ const toMessage = (candidate: Candidate): InboundMessage => ({
   via: candidate.via,
 });
 
+const isWaitingInThread = (waiting: Candidate, startedFrom: Candidate) =>
+  waiting.id !== startedFrom.id &&
+  waiting.handedBackBy === null &&
+  waiting.channel === startedFrom.channel &&
+  waiting.threadTs === startedFrom.threadTs;
+
+const followUpWaitingInThread = (
+  context: DecisionContext,
+  startedFrom: Candidate,
+  taskId: string,
+): number => {
+  const waitingInThread = context.store.candidates
+    .undecided()
+    .filter((waiting) => isWaitingInThread(waiting, startedFrom));
+  for (const waiting of waitingInThread) {
+    settle(
+      context,
+      waiting.id,
+      `Sent in the thread that task ${taskId} took over.`,
+      (threadCandidate) => {
+        const disposition = takeFollowUp({
+          message: toMessage(threadCandidate),
+          taskId,
+          store: context.store,
+        });
+        return {
+          outcome: disposition === "stopped_task" ? "stop" : "attach",
+          taskId,
+          disposition,
+          reply: "",
+        };
+      },
+    );
+  }
+  return waitingInThread.length;
+};
+
 export const decideStartTask = (
   context: DecisionContext,
   { candidateId, repo: repoName, title, reason }: StartTaskDecision,
@@ -116,20 +154,21 @@ export const decideStartTask = (
         ? `This message is in task ${owner.taskId}'s thread, so no task can start from it. Reply asking the owner to send it as a new message, or attach it to the task it is about.`
         : `This thread already belongs to task ${owner.taskId}. Attach the message to it, or reply.`;
     }
-    startTask({
+    const task = startTask({
       message: toMessage(candidate),
       repo,
       store: context.store,
       title,
     });
-    const taskId =
-      context.store.threads.owner(candidate.channel, candidate.threadTs)
-        ?.taskId ?? null;
+    const followUpCount = followUpWaitingInThread(context, candidate, task.id);
     return {
       outcome: "start_task",
-      taskId,
+      taskId: task.id,
       disposition: "routed",
-      reply: `Started task ${taskId} in ${repo.name}.`,
+      reply:
+        followUpCount === 0
+          ? `Started task ${task.id} in ${repo.name}.`
+          : `Started task ${task.id} in ${repo.name}, and passed it the ${followUpCount} later message(s) waiting in its thread.`,
     };
   });
 
