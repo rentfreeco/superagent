@@ -123,8 +123,12 @@ export const createTaskRunner = ({
     return describeAcknowledgement(acknowledgedCount);
   };
 
-  const handBack = (taskId: string, reason: string): ToolOutcome => {
-    const outcome = handBackMessage({ store, taskId, reason });
+  const handBack = (
+    taskId: string,
+    inputId: number,
+    reason: string,
+  ): ToolOutcome => {
+    const outcome = handBackMessage({ store, taskId, inputId, reason });
     if (outcome.isAccepted) wakeRouter();
     return outcome;
   };
@@ -287,7 +291,7 @@ export const createTaskRunner = ({
         readThread: () =>
           readTaskThread({ threads, task: runningTask, ownerUserId }),
         report: (workerReport) => postWorkerReport(task.id, workerReport),
-        handBack: (reason) => handBack(task.id, reason),
+        handBack: (inputId, reason) => handBack(task.id, inputId, reason),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live

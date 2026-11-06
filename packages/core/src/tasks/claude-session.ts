@@ -44,7 +44,7 @@ export interface WorkerSessionOptions {
   ack(): string;
   readThread(): Promise<string>;
   report(report: WorkerReport): ToolOutcome;
-  handBack(reason: string): ToolOutcome;
+  handBack(inputId: number, reason: string): ToolOutcome;
   events: WorkerSessionEvents;
 }
 
@@ -136,7 +136,10 @@ const WORKER_SANDBOX_DOMAINS = [
 
 const toAgentPrompt = ({ id, source, text }: TaskInput): AgentPrompt => ({
   id,
-  text: source === "slack" ? text : `[${source}] ${text}`,
+  text:
+    source === "slack" || source === "router"
+      ? `[message ${id}] ${text}`
+      : `[${source}] ${text}`,
 });
 
 export const agentEnvironment = (
@@ -224,14 +227,19 @@ export const createHandBackTool = (
 ) =>
   tool(
     "hand_back",
-    "Hand the newest message the owner sent you this turn back to superagent's router, when it isn't about this task, such as a new request sent in your thread. The router decides what happens to it.",
+    "Hand a message from the owner back to superagent's router, when it isn't about this task, such as a new request sent in your thread. The router decides what happens to it.",
     {
+      message_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("The N from the message's [message N] label."),
       reason: z
         .string()
         .min(1)
         .describe("One sentence on why the message isn't about this task."),
     },
-    async ({ reason }) => toToolResult(handBack(reason)),
+    async (args) => toToolResult(handBack(args.message_id, args.reason)),
   );
 
 export const createClaudeSessionStarter =

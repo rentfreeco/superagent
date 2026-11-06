@@ -336,6 +336,7 @@ describe("createTaskRunner", () => {
     const { addInput, createTask, sessions, startRunner, store, wakeRouter } =
       setup();
     const task = createTask();
+    addInput(task.id);
     const offTopic = addInput(task.id, "what's on my calendar?");
     store.events.record({
       eventId: offTopic?.ref ?? "",
@@ -349,6 +350,7 @@ describe("createTaskRunner", () => {
     await startRunner(1);
 
     const outcome = sessionAt(sessions, 0).options.handBack(
+      offTopic?.id ?? 0,
       "It isn't about the flaky test.",
     );
 

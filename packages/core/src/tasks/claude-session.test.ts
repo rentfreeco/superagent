@@ -225,7 +225,7 @@ describe("createClaudeSessionStarter", () => {
     expect(request.options.resume).toBe("s-1");
   });
 
-  it("sends each input as a prompt with its own uuid, marking ones that aren't from Slack", async () => {
+  it("sends each input as a prompt with its own uuid, labeling Slack messages with their number and others with their source", async () => {
     const { nextPrompt, session } = setup();
 
     session.send([taskInput({ id: 3, source: "github", text: "CI failed" })]);
@@ -236,7 +236,7 @@ describe("createClaudeSessionStarter", () => {
       await nextPrompt(),
     ];
     expect(prompts.map((prompt) => prompt?.message.content)).toEqual([
-      "fix the flaky test",
+      "[message 1] fix the flaky test",
       "[system] restarted",
       "[github] CI failed",
     ]);
@@ -419,20 +419,23 @@ describe("createReportTool", () => {
 });
 
 describe("createHandBackTool", () => {
-  it("passes the worker's reason on, and answers with the outcome", async () => {
-    const handBack = vi.fn((_reason: string): ToolOutcome => ({
-      isAccepted: true,
-      reply: "Handed the message back.",
-    }));
+  it("passes the message the worker names and its reason on, and answers with the outcome", async () => {
+    const handBack = vi.fn(
+      (_inputId: number, _reason: string): ToolOutcome => ({
+        isAccepted: true,
+        reply: "Handed the message back.",
+      }),
+    );
     const handBackTool = createHandBackTool(handBack);
 
     const answer = await handBackTool.handler(
-      { reason: "It asks about another repo." },
+      { message_id: 2, reason: "It asks about another repo." },
       undefined,
     );
 
     expect(handBackTool.name).toBe("hand_back");
     expect(handBack).toHaveBeenCalledExactlyOnceWith(
+      2,
       "It asks about another repo.",
     );
     expect(answer).toEqual({

@@ -10,6 +10,7 @@ export interface HandBackOptions {
     "transaction" | "tasks" | "inputs" | "events" | "candidates"
   >;
   taskId: string;
+  inputId: number;
   reason: string;
 }
 
@@ -41,43 +42,36 @@ const toOwnerMessage = (
   };
 };
 
+const refused = (reply: string): ToolOutcome => ({ isAccepted: false, reply });
+
 /**
- * Hands the newest Slack message the worker was given this turn back to the
- * router, as a candidate that names the task and why.
+ * Hands a Slack message the worker was given back to the router, as a
+ * candidate that names the task and why.
  */
 export const handBackMessage = ({
   store,
   taskId,
+  inputId,
   reason,
 }: HandBackOptions): ToolOutcome =>
   store.transaction(() => {
-    const task = store.tasks.get(taskId);
-    if (task === undefined) {
-      return { isAccepted: false, reply: `There is no task ${taskId}.` };
+    const input = store.inputs.get(inputId);
+    if (input?.taskId !== taskId || input.deliveredAt === null) {
+      return refused(`You haven't been given a message ${inputId}.`);
     }
-    const message = store.inputs
-      .unread(taskId)
-      .flatMap((input) => {
-        if (input.ref === null || input.deliveredAt === null) return [];
-        const ownerMessage = toOwnerMessage(input, store.events.get(input.ref));
-        return ownerMessage === undefined ? [] : [ownerMessage];
-      })
-      .at(-1);
+    const message =
+      input.ref === null
+        ? undefined
+        : toOwnerMessage(input, store.events.get(input.ref));
     if (message === undefined) {
-      return {
-        isAccepted: false,
-        reply: "No message from the owner arrived this turn to hand back.",
-      };
+      return refused(
+        `Message ${inputId} isn't a Slack message from the owner, so it can't be handed back.`,
+      );
     }
-    if (
-      message.channel === task.originChannel &&
-      message.ts === task.originTs
-    ) {
-      return {
-        isAccepted: false,
-        reply:
-          "That is the request this task was started for, so it can't be handed back. If it can't be done here, report failed with why.",
-      };
+    if (store.inputs.first(taskId)?.id === inputId) {
+      return refused(
+        "That is the request this task was started for, so it can't be handed back. If it can't be done here, report failed with why.",
+      );
     }
     const candidate = store.candidates.add({
       ...message,
@@ -85,10 +79,9 @@ export const handBackMessage = ({
       handBackReason: reason,
     });
     return candidate === undefined
-      ? { isAccepted: false, reply: "You already handed this message back." }
+      ? refused(`You already handed message ${inputId} back.`)
       : {
           isAccepted: true,
-          reply:
-            "Handed the message back. superagent's router decides what happens to it, so carry on with the task as if it hadn't arrived.",
+          reply: `Handed message ${inputId} back. superagent's router decides what happens to it, so carry on with the task as if it hadn't arrived.`,
         };
   });
