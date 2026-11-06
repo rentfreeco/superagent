@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createOutboxSender } from "@repo/core/outbox";
 import {
@@ -6,6 +7,7 @@ import {
   takeRecoverySnapshot,
 } from "@repo/core/recovery";
 import { loadConfig, type Repo } from "@repo/core/repos";
+import { createRouter, createRouterSessionStarter } from "@repo/core/router";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@repo/core/tasks";
 import {
   CONFIG_PATH,
+  ROUTER_DIRECTORY_NAME,
   STORE_FILE_NAME,
   WORKTREES_DIRECTORY_NAME,
 } from "./constants.ts";
@@ -62,9 +65,12 @@ const main = async (): Promise<void> => {
     environment.dataDirectory,
     WORKTREES_DIRECTORY_NAME,
   );
+  const repos = new Map(
+    [...channelRepos.values()].map((repo) => [repo.name, repo]),
+  );
   const taskRunner = createTaskRunner({
     store,
-    repos: new Map([...channelRepos.values()].map((repo) => [repo.name, repo])),
+    repos,
     worktreesDirectory,
     startSession: createClaudeSessionStarter({
       sandbox: environment.workerSandbox,
@@ -72,6 +78,24 @@ const main = async (): Promise<void> => {
     wakeOutbox: outboxSender.wake,
     logger: console,
     ownerUserId: environment.slackOwnerId,
+  });
+  const routerDirectory = path.join(
+    environment.dataDirectory,
+    ROUTER_DIRECTORY_NAME,
+  );
+  await mkdir(routerDirectory, { recursive: true });
+  const router = createRouter({
+    store,
+    repos,
+    channelRepos,
+    startSession: createRouterSessionStarter({
+      workingDirectory: routerDirectory,
+      repos,
+      channelRepos,
+    }),
+    wakeOutbox: outboxSender.wake,
+    wakeTaskRunner: taskRunner.wake,
+    logger: console,
   });
 
   const connectToSlack = () =>
@@ -87,6 +111,8 @@ const main = async (): Promise<void> => {
         store,
         wakeOutbox: outboxSender.wake,
         wakeTaskRunner: taskRunner.wake,
+        routeThroughRouter: environment.router,
+        wakeRouter: router.wake,
       }),
       onReaction: createReactionHandler({
         store,
@@ -107,6 +133,7 @@ const main = async (): Promise<void> => {
 
   const disconnect = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`superagent: ${signal} received, disconnecting`);
+    router.stop();
     await taskRunner.stop();
     await outboxSender.stop();
     await slack.close();
@@ -124,6 +151,7 @@ const main = async (): Promise<void> => {
   });
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);
   taskRunner.start(slack);
+  if (environment.router) router.start();
 };
 
 main().catch((error: unknown) => {

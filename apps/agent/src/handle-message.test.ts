@@ -24,16 +24,22 @@ const inboundMessage = (fields: Partial<InboundMessage>): InboundMessage => ({
   ...fields,
 });
 
-const setup = (startTask: StartTask = vi.fn()) => {
+const setup = (
+  startTask: StartTask = vi.fn(),
+  { routeThroughRouter = false }: { routeThroughRouter?: boolean } = {},
+) => {
   const store = openStore({ path: IN_MEMORY_STORE });
   const wakeOutbox = vi.fn();
   const wakeTaskRunner = vi.fn();
+  const wakeRouter = vi.fn();
   const handleMessage = createMessageHandler({
     channelRepos,
     startTask,
     store,
     wakeOutbox,
     wakeTaskRunner,
+    routeThroughRouter,
+    wakeRouter,
   });
   const receive = (message: InboundMessage): void => {
     store.events.record({
@@ -76,9 +82,65 @@ const setup = (startTask: StartTask = vi.fn()) => {
     startTask,
     store,
     wakeOutbox,
+    wakeRouter,
     wakeTaskRunner,
   };
 };
+
+describe("createMessageHandler with the router", () => {
+  it("leaves a DM or a mention no task owns to the router, unsettled, and wakes it", () => {
+    const { queuedPosts, receive, startTask, store, wakeRouter } = setup(
+      vi.fn(),
+      { routeThroughRouter: true },
+    );
+
+    receive(inboundMessage({ eventId: "EvMention" }));
+    receive(
+      inboundMessage({
+        eventId: "EvDm",
+        channel: "D0123ABCD",
+        ts: "200.000001",
+        threadTs: "200.000001",
+        via: "dm",
+      }),
+    );
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(queuedPosts()).toEqual([]);
+    expect(
+      store.candidates
+        .undecided()
+        .map(({ eventId, via }) => ({ eventId, via })),
+    ).toEqual([
+      { eventId: "EvMention", via: "mention" },
+      { eventId: "EvDm", via: "dm" },
+    ]);
+    expect(store.events.get("EvMention")?.disposition).toBe("received");
+    expect(wakeRouter).toHaveBeenCalledTimes(2);
+  });
+
+  it("still gives a message in a task's thread to that task, not the router", () => {
+    const { createTaskOwningThread, receive, store } = setup(vi.fn(), {
+      routeThroughRouter: true,
+    });
+    createTaskOwningThread();
+
+    receive(inboundMessage({ eventId: "Ev2", ts: "100.000002" }));
+
+    expect(store.candidates.undecided()).toEqual([]);
+    expect(store.events.get("Ev2")?.disposition).toBe("task_input");
+  });
+
+  it("queues a redelivered or replayed message for the router once", () => {
+    const { receive, store } = setup(vi.fn(), { routeThroughRouter: true });
+    const message = inboundMessage({});
+
+    receive(message);
+    receive(message);
+
+    expect(store.candidates.undecided()).toHaveLength(1);
+  });
+});
 
 describe("createMessageHandler", () => {
   it("starts a task for a mention in a mapped channel and settles it as routed", () => {

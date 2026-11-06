@@ -1,11 +1,18 @@
 import { type Repo, routeMessage } from "@repo/core/repos";
+import { queueCandidate } from "@repo/core/router";
 import type { InboundMessage } from "@repo/core/slack";
 import type { Store } from "@repo/core/store";
 import { takeFollowUp, type TaskRequest } from "@repo/core/tasks";
 
 export interface HandlerStore extends Pick<
   Store,
-  "transaction" | "events" | "outbox" | "tasks" | "threads" | "inputs"
+  | "transaction"
+  | "events"
+  | "outbox"
+  | "tasks"
+  | "threads"
+  | "inputs"
+  | "candidates"
 > {}
 
 export type StartTask = (request: TaskRequest) => undefined;
@@ -16,6 +23,9 @@ export interface MessageHandlerOptions {
   store: HandlerStore;
   wakeOutbox: () => void;
   wakeTaskRunner: () => void;
+  /** Leave messages no task owns to the router, instead of routing them by the channel map here. */
+  routeThroughRouter: boolean;
+  wakeRouter: () => void;
 }
 
 export const createMessageHandler =
@@ -25,6 +35,8 @@ export const createMessageHandler =
     store,
     wakeOutbox,
     wakeTaskRunner,
+    routeThroughRouter,
+    wakeRouter,
   }: MessageHandlerOptions) =>
   (message: InboundMessage): void => {
     const route = routeMessage(channelRepos, message);
@@ -42,6 +54,10 @@ export const createMessageHandler =
       }
       if (message.via === "thread") {
         store.events.setDisposition(message.eventId, "ignored");
+        return;
+      }
+      if (routeThroughRouter) {
+        queueCandidate({ message, store });
         return;
       }
       if (route.kind === "reply") {
@@ -64,4 +80,5 @@ export const createMessageHandler =
     });
     wakeOutbox();
     wakeTaskRunner();
+    wakeRouter();
   };

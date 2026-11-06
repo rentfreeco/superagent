@@ -19,7 +19,17 @@ describe("parseEnvironment", () => {
       logLevel: LogLevel.INFO,
       dataDirectory: path.join(homedir(), ".superagent"),
       workerSandbox: false,
+      router: true,
     });
+  });
+
+  it("turns the router off only for SUPERAGENT_ROUTER=off", () => {
+    expect(
+      parseEnvironment({ ...slackVariables, SUPERAGENT_ROUTER: "off" }).router,
+    ).toBe(false);
+    expect(() =>
+      parseEnvironment({ ...slackVariables, SUPERAGENT_ROUTER: "maybe" }),
+    ).toThrow(/must be on or off[\s\S]*SUPERAGENT_ROUTER/);
   });
 
   it("turns the worker sandbox on only for SUPERAGENT_WORKER_SANDBOX=on", () => {

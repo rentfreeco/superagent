@@ -6,3 +6,4 @@ export const CONFIG_PATH = fileURLToPath(
 
 export const STORE_FILE_NAME = "state.db";
 export const WORKTREES_DIRECTORY_NAME = "worktrees";
+export const ROUTER_DIRECTORY_NAME = "router";
