@@ -54,7 +54,7 @@ export interface RecoveryReport {
 }
 
 export const RESTART_NOTE =
-  "The superagent service restarted while you were working. Pick up where you left off.";
+  "The superagent service restarted while you were working. Before repeating anything that reaches outside your worktree, such as a push, a pull request or a comment, check git status, your branch and its pull request for what already happened. Then pick up where you left off.";
 
 const OPEN_TASK_STATES: readonly TaskState[] = [
   "queued",

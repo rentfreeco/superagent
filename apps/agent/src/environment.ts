@@ -9,6 +9,7 @@ export interface Environment {
   slackOwnerId: string;
   logLevel: LogLevel;
   dataDirectory: string;
+  workerSandbox: boolean;
 }
 
 const requiredString = () =>
@@ -34,6 +35,9 @@ const environmentSchema = z.object({
     .string()
     .min(1, "must be a directory path; leave it unset to use ~/.superagent")
     .default(path.join(homedir(), ".superagent")),
+  SUPERAGENT_WORKER_SANDBOX: z
+    .enum(["on", "off"], { error: "must be on or off" })
+    .default("off"),
 });
 
 export const parseEnvironment = (
@@ -51,5 +55,6 @@ export const parseEnvironment = (
     slackOwnerId: result.data.SLACK_OWNER_ID,
     logLevel: result.data.LOG_LEVEL,
     dataDirectory: path.resolve(result.data.SUPERAGENT_DATA_DIR),
+    workerSandbox: result.data.SUPERAGENT_WORKER_SANDBOX === "on",
   };
 };
