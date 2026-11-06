@@ -27,11 +27,13 @@ const inboundMessage = (fields: Partial<InboundMessage>): InboundMessage => ({
 const setup = (startTask: StartTask = vi.fn()) => {
   const store = openStore({ path: IN_MEMORY_STORE });
   const wakeOutbox = vi.fn();
+  const wakeTaskRunner = vi.fn();
   const handleMessage = createMessageHandler({
     channelRepos,
     startTask,
     store,
     wakeOutbox,
+    wakeTaskRunner,
   });
   const receive = (message: InboundMessage): void => {
     store.events.record({
@@ -52,12 +54,35 @@ const setup = (startTask: StartTask = vi.fn()) => {
       threadTs,
       message,
     }));
-  return { queuedPosts, receive, startTask, store, wakeOutbox };
+  const createTaskOwningThread = () => {
+    const task = store.tasks.create({
+      title: "Fix the flaky test",
+      repo: "superagent",
+      originChannel: "C0123ABCD",
+      originTs: "100.000001",
+    });
+    store.tasks.transition(task.id, "running");
+    store.threads.claim({
+      channel: "C0123ABCD",
+      threadTs: "100.000001",
+      taskId: task.id,
+    });
+    return task;
+  };
+  return {
+    createTaskOwningThread,
+    queuedPosts,
+    receive,
+    startTask,
+    store,
+    wakeOutbox,
+    wakeTaskRunner,
+  };
 };
 
 describe("createMessageHandler", () => {
   it("starts a task for a mention in a mapped channel and settles it as routed", () => {
-    const { receive, startTask, store, wakeOutbox } = setup();
+    const { receive, startTask, store, wakeOutbox, wakeTaskRunner } = setup();
     const message = inboundMessage({});
 
     receive(message);
@@ -69,6 +94,50 @@ describe("createMessageHandler", () => {
     });
     expect(store.events.get("Ev1")?.disposition).toBe("routed");
     expect(wakeOutbox).toHaveBeenCalledOnce();
+    expect(wakeTaskRunner).toHaveBeenCalledOnce();
+  });
+
+  it("gives a message in a task's thread to that task instead of starting another", () => {
+    const {
+      createTaskOwningThread,
+      queuedPosts,
+      receive,
+      startTask,
+      store,
+      wakeTaskRunner,
+    } = setup();
+    const task = createTaskOwningThread();
+
+    receive(
+      inboundMessage({
+        eventId: "Ev2",
+        ts: "100.000002",
+        text: "also the lint",
+      }),
+    );
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(store.inputs.undelivered(task.id)).toEqual([
+      expect.objectContaining({ ref: "Ev2", text: "also the lint" }),
+    ]);
+    expect(queuedPosts()).toEqual([
+      expect.objectContaining({
+        dedupeKey: "ack:Ev2",
+        message: { kind: "reaction", name: "eyes", timestamp: "100.000002" },
+      }),
+    ]);
+    expect(store.events.get("Ev2")?.disposition).toBe("task_input");
+    expect(wakeTaskRunner).toHaveBeenCalledOnce();
+  });
+
+  it("stops the task when its thread gets the word stop, and settles the event as stopped_task", () => {
+    const { createTaskOwningThread, receive, store } = setup();
+    const task = createTaskOwningThread();
+
+    receive(inboundMessage({ eventId: "Ev2", ts: "100.000002", text: "stop" }));
+
+    expect(store.tasks.get(task.id)?.state).toBe("stopped");
+    expect(store.events.get("Ev2")?.disposition).toBe("stopped_task");
   });
 
   it("queues a reply to a DM in its thread and settles it as replied", () => {
@@ -119,12 +188,14 @@ describe("createMessageHandler", () => {
       });
       throw new Error("worktree failed");
     };
-    const { queuedPosts, receive, store, wakeOutbox } = setup(failingStart);
+    const { queuedPosts, receive, store, wakeOutbox, wakeTaskRunner } =
+      setup(failingStart);
 
     expect(() => receive(inboundMessage({}))).toThrow("worktree failed");
     expect(queuedPosts()).toEqual([]);
     expect(store.events.get("Ev1")?.disposition).toBe("received");
     expect(wakeOutbox).not.toHaveBeenCalled();
+    expect(wakeTaskRunner).not.toHaveBeenCalled();
   });
 
   it("refuses a startTask that returns a promise, without settling the event", () => {

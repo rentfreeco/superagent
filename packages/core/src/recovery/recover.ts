@@ -1,6 +1,8 @@
+import { RECOVERY_ENDED_TASK_WINDOW_MS } from "../constants.ts";
 import type { StoredEvent } from "../store/events.ts";
 import type { Store } from "../store/open-store.ts";
 import type { TaskState } from "../store/tasks.ts";
+import { describeError } from "../utils/describe-error.ts";
 
 export interface RecoveryCatchUpTarget {
   channel: string;
@@ -26,6 +28,7 @@ export interface RecoverySnapshotOptions {
   store: Pick<Store, "events" | "tasks" | "threads">;
   ownerUserId: string;
   channels: readonly string[];
+  now?: () => number;
 }
 
 export interface RecoverySnapshot {
@@ -60,13 +63,18 @@ const OPEN_TASK_STATES: readonly TaskState[] = [
   "ready",
 ];
 
-const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const ENDED_TASK_STATES: readonly TaskState[] = [
+  "done",
+  "blocked",
+  "failed",
+  "stopped",
+];
 
 export const takeRecoverySnapshot = ({
   store,
   ownerUserId,
   channels,
+  now = Date.now,
 }: RecoverySnapshotOptions): RecoverySnapshot => {
   const conversations = [
     ...new Set([
@@ -78,13 +86,17 @@ export const takeRecoverySnapshot = ({
     threadTs: null,
     oldest: store.events.latestTs(channel),
   }));
-  const taskThreads = store.threads
-    .ownedByTasksIn(OPEN_TASK_STATES)
-    .map(({ channel, threadTs }) => ({
-      channel,
-      threadTs,
-      oldest: store.events.latestTsInThread(channel, threadTs) ?? threadTs,
-    }));
+  const taskThreads = [
+    ...store.threads.ownedByTasksIn(OPEN_TASK_STATES),
+    ...store.threads.ownedByTasksIn(
+      ENDED_TASK_STATES,
+      now() - RECOVERY_ENDED_TASK_WINDOW_MS,
+    ),
+  ].map(({ channel, threadTs }) => ({
+    channel,
+    threadTs,
+    oldest: store.events.latestTsInThread(channel, threadTs) ?? threadTs,
+  }));
   return {
     unfinishedEvents: store.events.unfinished(),
     runningTaskIds: store.tasks.withState(["running"]).map(({ id }) => id),

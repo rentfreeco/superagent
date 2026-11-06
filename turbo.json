@@ -24,7 +24,12 @@
         "SLACK_APP_TOKEN",
         "SLACK_OWNER_ID",
         "LOG_LEVEL",
-        "SUPERAGENT_DATA_DIR"
+        "SUPERAGENT_DATA_DIR",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "SSH_AUTH_SOCK"
       ]
     }
   }

@@ -20,7 +20,10 @@ export interface ThreadClaim {
 export interface ThreadStore {
   owner(channel: string, threadTs: string): ThreadOwner | undefined;
   claim(claim: ThreadClaim): ThreadOwner;
-  ownedByTasksIn(states: readonly TaskState[]): ThreadOwner[];
+  ownedByTasksIn(
+    states: readonly TaskState[],
+    activeSince?: number,
+  ): ThreadOwner[];
 }
 
 const THREAD_COLUMNS =
@@ -55,7 +58,7 @@ export const createThreadStore = (
       insertOrHandOff.run({ channel, threadTs, taskId, createdAt: now() });
       return threadOwnerSchema.parse(selectOwner.get({ channel, threadTs }));
     },
-    ownedByTasksIn: (states) => {
+    ownedByTasksIn: (states, activeSince = 0) => {
       if (states.length === 0) return [];
       const placeholders = states.map(() => "?").join(", ");
       return database
@@ -63,9 +66,10 @@ export const createThreadStore = (
           `select ${THREAD_COLUMNS} from threads
            join tasks on tasks.id = threads.task_id
            where tasks.state in (${placeholders})
+             and tasks.last_activity_at >= ?
            order by threads.created_at, threads.channel, threads.thread_ts`,
         )
-        .all(...states)
+        .all(...states, activeSince)
         .map((row) => threadOwnerSchema.parse(row));
     },
   };

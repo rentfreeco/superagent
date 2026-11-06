@@ -112,10 +112,10 @@ store.transaction(() => {
   });
   store.threads.claim({ channel, threadTs, taskId: task.id });
   store.outbox.enqueue({
-    dedupeKey: `ack:${task.id}`,
+    dedupeKey: `ack:${eventId}`,
     channel,
     threadTs: null,
-    message: { kind: "reaction", name: "eyes", timestamp: originTs },
+    message: { kind: "reaction", name: "eyes", timestamp: messageTs },
   });
   store.events.setDisposition(eventId, "routed");
 });
@@ -184,4 +184,44 @@ const report = await recoverAfterRestart({
 2. **Running tasks.** Each task running at the snapshot gets a `system` input saying the service restarted, for the task runner to resume it with.
 3. **Catch-up.** For your DM channel, every mapped channel, and every open task's thread, it reads what was sent after the latest ts the snapshot has for it, and feeds your messages through the real gate as synthetic events (`catchup:<channel>:<ts>`). In channels only messages that mention the bot count, as they would live. The gate's per-message claim skips anything already handled.
 
-A channel the store has no events for has no starting point, so it is skipped and listed in the report. Channel history only holds top-level messages, so thread replies are caught up only in open task threads. A failure anywhere is logged and counted, and recovery carries on with the next item.
+A channel the store has no events for has no starting point, so it is skipped and listed in the report. Channel history only holds top-level messages, so thread replies are caught up only in task threads: those of open tasks, and of tasks that ended in the last seven days, since a reply can resume one. A reply in an older thread sent while the bot was down is missed. A failure anywhere is logged and counted, and recovery carries on with the next item.
+
+## `@repo/core/tasks`
+
+Turns requests into Claude Code sessions. Each task gets a worktree of its own on `agent/<task id>`, and one session at a time through the Claude Agent SDK.
+
+```ts
+import {
+  createClaudeSessionStarter,
+  createTaskRunner,
+  startTask,
+  takeFollowUp,
+} from "@repo/core/tasks";
+
+// inside the message handler's transaction:
+startTask({ message, repo, store }); // a new request
+const disposition = takeFollowUp({ message, taskId, store }); // a message in a task's thread
+
+const taskRunner = createTaskRunner({
+  store,
+  repos, // repo name -> Repo
+  worktreesDirectory: "/data/worktrees",
+  startSession: createClaudeSessionStarter(),
+  wakeOutbox: outboxSender.wake,
+  logger: console,
+});
+taskRunner.start(); // after restart recovery
+taskRunner.wake(); // after the handler writes rows
+await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks stay running
+```
+
+- **A new request:** `startTask` queues a task that owns the thread, keeps the message as its first input, and queues an 👀 reaction on the message. Nothing else is posted.
+- **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
+- **Reporting:** the worker reaches Slack only through its `report` tool: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
+- **Follow-ups:** a message in the task's thread becomes an input and gets an 👀. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
+- **Stop:** the word `stop` alone in the thread marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
+- **Restarts:** a task left `running` is resumed from its stored session ID with every input it hadn't read, including recovery's restart note.
+- **Limits:** at most three sessions run at once; other tasks wait, oldest first.
+- **When things go wrong:** a turn that ends without a report posts the worker's last message and waits on you. A failed turn, a session that ends early, or a task that can't start is marked `failed` with the reason. Replying in the thread tries again.
+
+Sessions use `claude-opus-5-5` at high effort with Claude Code's permission checks off, so the worker can run any command in its worktree. They get the service's environment minus every `SLACK_` variable, so they use this machine's Claude Code login (or `ANTHROPIC_API_KEY`) and its git and `gh` credentials.

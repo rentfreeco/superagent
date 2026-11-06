@@ -1,5 +1,6 @@
 import { OUTBOX_POLL_INTERVAL_MS } from "../constants.ts";
 import type { OutboxEntry, OutboxStore } from "../store/outbox.ts";
+import { describeError } from "../utils/describe-error.ts";
 
 export interface OutboxPost {
   channel: string;
@@ -59,9 +60,6 @@ export interface OutboxSender {
   drain(): Promise<void>;
   stop(): Promise<void>;
 }
-
-const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 export const createOutboxSender = ({
   outbox,

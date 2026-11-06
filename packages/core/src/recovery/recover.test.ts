@@ -38,7 +38,7 @@ const createTaskIn = (store: Store, state: TaskState, originTs: string) => {
 };
 
 const setup = () => {
-  const { store } = openTestStore();
+  const { clock, store } = openTestStore();
   const slack = {
     replay: vi.fn(async (_event: StoredEvent) => undefined),
     catchUp: vi.fn(
@@ -55,15 +55,20 @@ const setup = () => {
     recoverAfterRestart({
       store,
       slack,
-      snapshot: takeRecoverySnapshot({ store, ownerUserId: OWNER, channels }),
+      snapshot: takeRecoverySnapshot({
+        store,
+        ownerUserId: OWNER,
+        channels,
+        now: () => clock.now,
+      }),
       logger,
     });
-  return { logger, recover, slack, store };
+  return { clock, logger, recover, slack, store };
 };
 
 describe("recoverAfterRestart", () => {
   it("works from the snapshot, so nothing recorded after connecting moves a starting point or adds a task", async () => {
-    const { logger, slack, store } = setup();
+    const { clock, logger, slack, store } = setup();
     store.events.record(
       ownerMessage({ eventId: "EvBeforeDowntime", ts: "100.000005" }),
     );
@@ -78,6 +83,7 @@ describe("recoverAfterRestart", () => {
       store,
       ownerUserId: OWNER,
       channels: [],
+      now: () => clock.now,
     });
 
     store.events.record(
@@ -180,18 +186,29 @@ describe("recoverAfterRestart", () => {
     });
   });
 
-  it("catches up open task threads from their latest reply, or their root", async () => {
-    const { recover, slack, store } = setup();
-    const withReplies = createTaskIn(store, "running", "300.000001");
-    const withoutReplies = createTaskIn(store, "waiting", "400.000001");
-    const finished = createTaskIn(store, "done", "500.000001");
-    for (const task of [withReplies, withoutReplies, finished]) {
-      store.threads.claim({
-        channel: "C0MAPPED",
-        threadTs: task.originTs,
-        taskId: task.id,
-      });
-    }
+  it("catches up the threads of open tasks, and of tasks that ended in the last week, from their latest reply or their root", async () => {
+    const { clock, recover, slack, store } = setup();
+    const claimThreads = (
+      tasks: readonly { id: string; originTs: string }[],
+    ) => {
+      for (const task of tasks) {
+        store.threads.claim({
+          channel: "C0MAPPED",
+          threadTs: task.originTs,
+          taskId: task.id,
+        });
+      }
+    };
+    claimThreads([
+      createTaskIn(store, "failed", "100.000001"),
+      createTaskIn(store, "ready", "200.000001"),
+    ]);
+    clock.now += 8 * 24 * 60 * 60_000;
+    claimThreads([
+      createTaskIn(store, "running", "300.000001"),
+      createTaskIn(store, "waiting", "400.000001"),
+      createTaskIn(store, "done", "500.000001"),
+    ]);
     store.events.record(
       ownerMessage({
         eventId: "EvReply",
@@ -209,8 +226,10 @@ describe("recoverAfterRestart", () => {
       .map(([target]) => target)
       .filter(({ threadTs }) => threadTs !== null);
     expect(threadTargets).toEqual([
+      { channel: "C0MAPPED", threadTs: "200.000001", oldest: "200.000001" },
       { channel: "C0MAPPED", threadTs: "300.000001", oldest: "300.000009" },
       { channel: "C0MAPPED", threadTs: "400.000001", oldest: "400.000001" },
+      { channel: "C0MAPPED", threadTs: "500.000001", oldest: "500.000001" },
     ]);
   });
 

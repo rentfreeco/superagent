@@ -8,8 +8,16 @@ import {
 import { loadConfig, type Repo } from "@repo/core/repos";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
-import { acknowledgeTask } from "./acknowledge-task.ts";
-import { CONFIG_PATH, STORE_FILE_NAME } from "./constants.ts";
+import {
+  createClaudeSessionStarter,
+  createTaskRunner,
+  startTask,
+} from "@repo/core/tasks";
+import {
+  CONFIG_PATH,
+  STORE_FILE_NAME,
+  WORKTREES_DIRECTORY_NAME,
+} from "./constants.ts";
 import { parseEnvironment } from "./environment.ts";
 import { createMessageHandler } from "./handle-message.ts";
 
@@ -49,6 +57,18 @@ const main = async (): Promise<void> => {
     outbox: store.outbox,
     logger: console,
   });
+  const worktreesDirectory = path.join(
+    environment.dataDirectory,
+    WORKTREES_DIRECTORY_NAME,
+  );
+  const taskRunner = createTaskRunner({
+    store,
+    repos: new Map([...channelRepos.values()].map((repo) => [repo.name, repo])),
+    worktreesDirectory,
+    startSession: createClaudeSessionStarter(),
+    wakeOutbox: outboxSender.wake,
+    logger: console,
+  });
 
   const connectToSlack = () =>
     SlackGateway.connect({
@@ -59,9 +79,10 @@ const main = async (): Promise<void> => {
       eventLog: store.events,
       onMessage: createMessageHandler({
         channelRepos,
-        startTask: acknowledgeTask,
+        startTask,
         store,
         wakeOutbox: outboxSender.wake,
+        wakeTaskRunner: taskRunner.wake,
       }),
     });
   const slack = await connectToSlack().catch((error: unknown) => {
@@ -70,11 +91,12 @@ const main = async (): Promise<void> => {
   });
   outboxSender.start(slack);
   console.log(
-    `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}`,
+    `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}. Worktrees: ${worktreesDirectory}`,
   );
 
   const disconnect = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`superagent: ${signal} received, disconnecting`);
+    await taskRunner.stop();
     await outboxSender.stop();
     await slack.close();
     store.close();
@@ -90,6 +112,7 @@ const main = async (): Promise<void> => {
     logger: console,
   });
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);
+  taskRunner.start();
 };
 
 main().catch((error: unknown) => {

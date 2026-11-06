@@ -100,6 +100,23 @@ describe("inputs", () => {
     );
   });
 
+  it("keeps a delivered input unread until it is marked read", () => {
+    const { store, createTask } = setup();
+    const task = createTask();
+    const [delivered, read, waiting] = ["one", "two", "three"].map((text) =>
+      store.inputs.add({ taskId: task.id, source: "system", ref: null, text }),
+    );
+    store.inputs.markDelivered(
+      [delivered?.id, read?.id].filter((id) => id !== undefined),
+    );
+    store.inputs.markRead(read === undefined ? [] : [read.id]);
+
+    expect(store.inputs.unread(task.id).map(({ id }) => id)).toEqual([
+      delivered?.id,
+      waiting?.id,
+    ]);
+  });
+
   it("treats marking an input delivered or read again as harmless", () => {
     const { store, createTask } = setup();
     const task = createTask();
