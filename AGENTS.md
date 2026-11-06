@@ -110,14 +110,18 @@ packages/
                                a restart, ends stopped and idle sessions, caps concurrency; gets
                                the Slack thread reader at start
         claude-session.ts      createClaudeSessionStarter: one Agent SDK query per session, fed
-                               inputs as streamed prompts; the ack, read_thread, and report
-                               MCP tools
+                               inputs as streamed prompts; the ack, read_thread, report, and
+                               hand_back MCP tools
         acknowledge-messages.ts acknowledgeMessages: the worker's ack, an 👀 on each Slack
                                message it was given and hasn't finished, as ack:<event_id>
         read-task-thread.ts    readTaskThread: the worker's read_thread, the owner's and the
                                bot's messages in the task's thread, newest that fit
         record-report.ts       recordReport: the report row, the state change, and the thread
                                post, in one transaction
+        hand-back-message.ts   handBackMessage: the worker's hand_back, the newest message it
+                               was given this turn as a router candidate naming the task and why
+        tool-outcome.ts        ToolOutcome, what a worker or router tool answers, and
+                               toToolResult
         worker-guard.ts        createWorkerGuard: the PreToolUse hook that refuses merges,
                                approvals, closing issues, force pushes, pushes to the base
                                branch, writes outside the worktree, and credential reads
@@ -143,9 +147,8 @@ apps/
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
                                SUPERAGENT_DATA_DIR, checked with zod
       handle-message.ts        createMessageHandler: in one transaction, give a message in a
-                               task's thread to takeFollowUp, or queue it for the router (or,
-                               with the router off, route it by the channel map); wake the
-                               outbox, the runner, and the router
+                               task's thread to takeFollowUp, or queue it for the router; wake
+                               the outbox, the runner, and the router
       handle-reaction.ts       createReactionHandler: takeReaction in one transaction, settle
                                the event, wake the outbox and runner
       constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
@@ -157,10 +160,10 @@ superagent.config.example.ts   the committed example; the real superagent.config
 
 - MUST: Keep `@repo/core/slack` transport-only: it delivers `InboundMessage`s and reads threads. Repo selection, tasks, and Claude Code sessions belong in their own `core` modules.
 - A task is keyed by `channel` + `threadTs`. `threadTs` is the thread root, so follow-ups in a thread land on the same task.
-- MUST: Decide a request's repo with `routeMessage` before any work starts. A message with no repo gets the route's reply, never a guessed repo.
+- MUST: Start a task only in a configured repo. The router's `start_task` refuses any other name, and the channel-map fallback decides with `routeMessage`. A message with no repo gets a reply, never a guessed repo.
 - MUST: Keep `apps/agent` to wiring: reading the environment, connecting, and passing messages to `core`. Logic that could be tested without a process belongs in `@repo/core`.
-- A routed request starts work through a `StartTask` (`apps/agent/src/handle-message.ts`), which is `startTask` from `@repo/core/tasks`. A `StartTask` is synchronous and only writes rows, inside the handler's transaction; the task runner acts on those rows in its own loop, as the outbox sender does for posts. Its type returns `undefined`, so an `async` one doesn't compile, and the handler also rolls back if one returns a promise anyway.
-- A message in a thread a task owns goes to `takeFollowUp`, before routing. The router never sees it.
+- A task starts through `startTask` from `@repo/core/tasks`, called by the router's `decideStartTask` inside the decision's transaction. It is synchronous and only writes rows; the task runner acts on those rows in its own loop, as the outbox sender does for posts.
+- A message in a thread a task owns goes to `takeFollowUp`, before routing. The router sees it only if the task's worker hands it back.
 
 ## TypeScript and Node
 
@@ -201,7 +204,7 @@ All state the service needs after a restart lives in `@repo/core/store`, one SQL
 - NEVER: open the same store from two processes, or keep it on a network filesystem. `openStore` refuses to run unless SQLite really switched to write-ahead logging.
 - MUST: Every Slack post and reaction goes through `store.outbox`. Only the outbox sender calls `SlackGateway.post` or `react`.
 - MUST: Queue an outbox entry in the same transaction as the event disposition or row change that caused it, with a dedupe key built from that cause (`reply:<event_id>`, `report:<report_id>`), so handling the same thing twice queues one post.
-- MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any `StartTask`, must give the same result when it sees an event it may already have half-handled.
+- MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any decision, must give the same result when it sees an event it may already have half-handled.
 - MUST: Take the recovery snapshot (`takeRecoverySnapshot`) before connecting to Slack, and recover only from it. Once connected, live events are recorded, including the bot's own posts echoed back by Slack. An event the live gate is still handling is also `received`, so replaying it would handle it twice, and any newer event moves a conversation's latest ts past the messages catch-up has to read.
 - MUST: Feed anything read back from Slack history through the gate (`SlackGateway.catchUp`), never straight to the handler. The gate's per-message claim is what stops a caught-up message from being handled again when its live event was already handled.
 
@@ -211,7 +214,7 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 
 - MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
 - An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
-- A worker has three tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages it was given and hasn't finished, `read_thread` reads the task's thread, and `report` posts where the task stands. Nothing reacts to or answers the owner until the worker does.
+- A worker has four tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages it was given and hasn't finished, `read_thread` reads the task's thread, `report` posts where the task stands, and `hand_back` gives the router a message that isn't about the task. Nothing reacts to or answers the owner until the worker does.
 - MUST: Show a worker only the owner's messages and the bot's own. `read_thread` leaves out everyone else's, since the owner gate is the only access control and workers run unattended.
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
 - A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
@@ -232,7 +235,8 @@ Every owner message no task owns, a DM or a mention outside a task's thread, is 
 - MUST: Keep the router to routing. Its session has no built-in tools, loads no settings files, and is allowed only the routing tools. Never give it a tool that reads code or runs commands; the worker owns the work.
 - When the router doesn't decide a candidate (its turn goes idle, its session fails or can't start, or the candidate waits past `ROUTER_DECISION_TIMEOUT_MS`), the channel map decides it, recorded as `decidedBy: "fallback"`.
 - The handler leaves a candidate's event `received` until a decision settles it. Restart recovery replays it, and queuing it again is a no-op.
-- `SUPERAGENT_ROUTER=off` routes by the channel map in the handler, as before the router.
+- A worker's `hand_back` queues the newest message it was given this turn as a new candidate naming the task and why, once per task. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
+- `SUPERAGENT_ROUTER=off` runs the router without a session: the channel map decides every candidate as soon as it's queued.
 
 ## Slack
 

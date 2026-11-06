@@ -19,7 +19,7 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 | --------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Intake: dedupe, own-message drop, read position, catch-up | GitHub and Feishu                                                          | Slack                                                                                 | Done for Slack; GitHub in M4                                            |
 | Who may ask                                               | Allowed lists, admission table, bot lists, mandates                        | The owner gate                                                                        | Done; the rest left out on purpose                                      |
-| Deciding new work                                         | Router session                                                             | Channel → repo map                                                                    | M3                                                                      |
+| Deciding new work                                         | Router session                                                             | A router session; the channel → repo map as its fallback                              | Code complete in #13; waiting on a live run                             |
 | Ticket lifecycle: resume, stop, one state machine         | ✓                                                                          | Task states, resume on reply, `stop` or 🛑                                            | Done                                                                    |
 | A worker per Ticket: session and directory                | ✓                                                                          | Agent SDK session and worktree on `agent/<id>`                                        | Done, across several repos                                              |
 | Inputs delivered and read, redelivery after a restart     | ✓                                                                          | ✓                                                                                     | Done                                                                    |
@@ -28,7 +28,7 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 | Acknowledgement                                           | One specific sentence                                                      | 👀 when the worker calls `ack`                                                        | Done, as a reaction by choice                                           |
 | Reports                                                   | progress, ready, blocked, failed, dropped; a question apart from the state | waiting, ready, done, blocked, failed                                                 | Partial: no internal progress, no silent drop, a question ends the turn |
 | Thread context                                            | ✓                                                                          | `read_thread`, the owner's and the bot's messages                                     | Done                                                                    |
-| Handing a follow-up back                                  | ✓                                                                          | —                                                                                     | M3                                                                      |
+| Handing a follow-up back                                  | ✓                                                                          | The worker's `hand_back`, decided by the router                                       | Code complete in #13; waiting on a live run                             |
 | The PR follows the Ticket: CI, reviews, merge ends it     | ✓                                                                          | —                                                                                     | M4                                                                      |
 | Retrying passing model and network failures               | Three times with backoff                                                   | The task fails and a reply retries it                                                 | M5                                                                      |
 | A slot kept for a person's follow-up                      | ✓                                                                          | A cap of three, oldest first                                                          | M5                                                                      |
@@ -47,7 +47,7 @@ Known risks:
 
 ## Milestones
 
-The order: M2's smoke test, M3 (in progress), then M4, M5, and M6.
+The order: M2's smoke test and M3's live run, then M4, M5, and M6.
 
 ### M1 — Foundation (done)
 
@@ -77,9 +77,9 @@ Left:
 - **The sandbox:** it's opt-in (`SUPERAGENT_WORKER_SANDBOX=on`). Try it in the smoke test: `git push` over SSH, worktree commits into the checkout's `.git`, and package installs. If it holds, make it the default.
 - **Done when:** the smoke test passes twice in a row; no one else's thread message reaches a worker; a sandboxed worker can't write outside its worktree or merge.
 
-### M3 — Router (in progress)
+### M3 — Router (code complete; waiting on a live run)
 
-Done in #13: the candidates and decisions tables, the decision functions with the channel-map fallback, the router session and its loop, the handler handing new messages to it, `SUPERAGENT_ROUTER`, and repo descriptions. Left: the worker's `hand_back` tool, and a live run.
+Code complete in #13: the candidates and decisions tables, the decision functions with the channel-map fallback, the router session and its loop, the handler handing every new message to it, the worker's `hand_back` tool, `SUPERAGENT_ROUTER`, and repo descriptions. Left: a live run.
 
 - **A long-lived router session:** its ID kept in the store, low effort, and only routing tools: no shell and no file reads.
 - **It sees** every owner message no task owns: DMs, mentions outside task threads, and hand-backs. Each comes with the channel's repo, the thread, and related tasks.
