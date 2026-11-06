@@ -26,3 +26,4 @@ export const WORKER_EFFORT = "high";
 export const ROUTER_TASK_LIST_LIMIT = 30;
 export const ROUTER_EFFORT = "low";
 export const ROUTER_POLL_INTERVAL_MS = 5_000;
+export const ROUTER_DECISION_TIMEOUT_MS = 5 * 60_000;

@@ -69,7 +69,7 @@ export const createCandidateStore = (
      where decided_at is null order by id`,
   );
   const updateDelivered = database.prepare(
-    "update candidates set delivered_at = :now where id = :id and delivered_at is null",
+    "update candidates set delivered_at = :now where id = :id and decided_at is null",
   );
   const updateDecided = database.prepare(
     "update candidates set decided_at = :now where id = :id and decided_at is null",
