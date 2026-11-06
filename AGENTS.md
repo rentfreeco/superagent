@@ -232,6 +232,7 @@ pnpm test
 ## Reference reading
 
 - `CONTRIBUTING.md`: setup, a Slack app of your own, and the pull request process
+- `docs/ROADMAP.md`: what is built, the milestones left, and what superagent leaves out of dsh-superagent on purpose
 - `packages/core/README.md`: what `@repo/core/slack` lets through and why
 - `node_modules/turbo/docs/`: Turborepo docs matching the installed version (see the block at the top)
 - `packages/core/node_modules/@slack/bolt/dist/`: Bolt 5 source and types
