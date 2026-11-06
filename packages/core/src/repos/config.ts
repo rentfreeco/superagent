@@ -4,6 +4,8 @@ export interface RepoConfig {
   github: string;
   path: string;
   baseBranch: string;
+  /** What the repo is, so the router can tell which one a request is about. */
+  description?: string | undefined;
 }
 
 export interface SuperagentConfig {
@@ -21,6 +23,7 @@ const repoConfigSchema = z.strictObject({
     .regex(/^[\w.-]+\/[\w.-]+$/, "must be owner/name, like pakgin/superagent"),
   path: z.string().min(1),
   baseBranch: z.string().min(1),
+  description: z.string().min(1).optional(),
 });
 
 const configSchema = z

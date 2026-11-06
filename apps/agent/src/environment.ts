@@ -10,6 +10,7 @@ export interface Environment {
   logLevel: LogLevel;
   dataDirectory: string;
   workerSandbox: boolean;
+  router: boolean;
 }
 
 const requiredString = () =>
@@ -35,6 +36,9 @@ const environmentSchema = z.object({
     .string()
     .min(1, "must be a directory path; leave it unset to use ~/.superagent")
     .default(path.join(homedir(), ".superagent")),
+  SUPERAGENT_ROUTER: z
+    .enum(["on", "off"], { error: "must be on or off" })
+    .default("on"),
   SUPERAGENT_WORKER_SANDBOX: z
     .enum(["on", "off"], { error: "must be on or off" })
     .default("off"),
@@ -56,5 +60,6 @@ export const parseEnvironment = (
     logLevel: result.data.LOG_LEVEL,
     dataDirectory: path.resolve(result.data.SUPERAGENT_DATA_DIR),
     workerSandbox: result.data.SUPERAGENT_WORKER_SANDBOX === "on",
+    router: result.data.SUPERAGENT_ROUTER === "on",
   };
 };

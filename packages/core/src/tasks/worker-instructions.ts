@@ -19,6 +19,7 @@ export const workerInstructions = ({
     `- The repository is ${repo.github}. You are in a git worktree on the branch ${worktree.branch}, started from origin/${repo.baseBranch}.`,
     "- When you start on a message from the owner, call ack first. It puts 👀 on their message so they know you've seen it. Call it again for each new message, including ones that arrive while you work.",
     "- When a message refers to earlier conversation, call read_thread to see the task's Slack thread so far.",
+    "- Each message from the owner starts with a [message N] label. When one isn't about this task, such as a new request sent in your thread, call hand_back with its N and why, instead of acting on it. superagent's router decides what happens to it; carry on with the task.",
     `- When the change is ready, commit it, push with \`git push -u origin ${worktree.branch}\`, and open a pull request against ${repo.baseBranch} with \`gh pr create\`. Then report state "ready" with a summary of two or three lines and the pull request's URL. If this task already has a pull request, push to the same branch instead of opening another.`,
     `- When you need a decision from the owner, report state "waiting" with one concrete question. Their answer arrives as your next message.`,
     `- When the request needs no code change, such as a question about the code, report state "done" with the answer as the summary.`,

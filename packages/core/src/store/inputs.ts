@@ -33,6 +33,9 @@ export interface NewTaskInput {
 
 export interface InputStore {
   add(input: NewTaskInput): TaskInput | undefined;
+  get(inputId: number): TaskInput | undefined;
+  /** The input the task was started with. */
+  first(taskId: string): TaskInput | undefined;
   undelivered(taskId: string): TaskInput[];
   unread(taskId: string): TaskInput[];
   tasksWithUndelivered(): string[];
@@ -55,6 +58,13 @@ export const createInputStore = (
      values (:taskId, :source, :ref, :text, :now)
      on conflict (source, ref) do nothing
      returning ${INPUT_COLUMNS}`,
+  );
+  const selectInput = database.prepare(
+    `select ${INPUT_COLUMNS} from inputs where id = :inputId`,
+  );
+  const selectFirst = database.prepare(
+    `select ${INPUT_COLUMNS} from inputs
+     where task_id = :taskId order by id limit 1`,
   );
   const selectUndelivered = database.prepare(
     `select ${INPUT_COLUMNS} from inputs
@@ -88,6 +98,14 @@ export const createInputStore = (
   return {
     add: ({ taskId, source, ref, text }) => {
       const row = insertInput.get({ taskId, source, ref, text, now: now() });
+      return row === undefined ? undefined : taskInputSchema.parse(row);
+    },
+    get: (inputId) => {
+      const row = selectInput.get({ inputId });
+      return row === undefined ? undefined : taskInputSchema.parse(row);
+    },
+    first: (taskId) => {
+      const row = selectFirst.get({ taskId });
       return row === undefined ? undefined : taskInputSchema.parse(row);
     },
     undelivered: (taskId) =>

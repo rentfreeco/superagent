@@ -70,7 +70,8 @@ Which repo a message is about. Each Slack channel maps to one repo, so every req
 ```ts
 import { loadConfig, routeMessage } from "@repo/core/repos";
 
-const channelRepos = await loadConfig("superagent.config.ts");
+const { repos, channelRepos } = await loadConfig("superagent.config.ts");
+// repos: repo name -> Repo, every configured repo; channelRepos: channel ID -> Repo
 
 // inside onMessage(message):
 const route = routeMessage(channelRepos, message);
@@ -100,7 +101,7 @@ export default defineConfig({
 - `repos` defines each repo once: its GitHub `owner/name`, a local git checkout (a path relative to the config file, or starting with `~`), and its base branch.
 - `channels` maps Slack channel IDs to repo names. Several channels can share a repo. Use IDs, not names, since names change: open the channel, click its name, and the ID is at the bottom of the **About** tab.
 
-`loadConfig` reads the file once and fails at startup, naming each problem: an unknown or misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a repo path that isn't a git checkout.
+`loadConfig` returns every repo by name, including ones no channel maps to (the router can still start work in them), and each channel's repo. It reads the file once and fails at startup, naming each problem: an unknown or misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a repo path that isn't a git checkout.
 
 `routeMessage` returns the repo for a mention in a mapped channel. A DM gets a reply listing the repo channels, and a mention in an unmapped channel gets a reply with the line to add to the config. The bot only hears channels it has been invited to (`/invite @superagent`).
 
@@ -196,6 +197,45 @@ const report = await recoverAfterRestart({
 
 A channel the store has no events for has no starting point, so it is skipped and listed in the report. Channel history only holds top-level messages, so thread replies are caught up only in task threads: those of open tasks, and of tasks that ended in the last seven days, since a reply can resume one. A reply in an older thread sent while the bot was down is missed. A failure anywhere is logged and counted, and recovery carries on with the next item.
 
+## `@repo/core/router`
+
+What happens to a message no task owns. The handler queues it as a candidate, and the router, one Claude session that only routes, decides it.
+
+```ts
+import {
+  createRouter,
+  createRouterSessionStarter,
+  queueCandidate,
+} from "@repo/core/router";
+
+// inside the message handler's transaction, for a message no task owns:
+queueCandidate({ message, store }); // its event stays received until a decision
+
+const router = createRouter({
+  store,
+  repos, // repo name -> Repo
+  channelRepos, // channel ID -> Repo, for the fallback
+  startSession: createRouterSessionStarter({
+    workingDirectory: "/data/router",
+    repos,
+    channelRepos,
+  }),
+  wakeOutbox: outboxSender.wake,
+  wakeTaskRunner: taskRunner.wake,
+  logger: console,
+});
+router.start(); // after restart recovery
+router.wake(); // after the handler queues a candidate
+router.stop(); // on shutdown
+```
+
+- **Decisions:** `start_task` (in any configured repo; the channel's repo is a default), `reply` (a short answer or one question), `attach` (to a task the message points at explicitly), `stop`, and `ignore`. Each runs in one transaction that records the decision with its reason, writes the task, input, or reply, settles the Slack event, and marks the candidate decided. A second decision for the same candidate is refused. Starting a task also passes it the other candidates still waiting in its thread, such as a second mention sent before the first was decided.
+- **Status:** `list_tasks` lists tasks for questions like "what's waiting on me?".
+- **The session:** `claude-opus-5-5` at low effort, resumed from the session ID kept in `kv`, with no built-in tools, no settings files, and only the routing tools allowed. Each candidate arrives as a card: where it was sent, its thread, and, for a hand-back, which task handed it back and why.
+- **Hand-backs:** a message a worker hands back is a candidate of its own, naming the task and why. The router won't attach it back to that task, and refuses to start a task in that task's thread.
+- **Fallback:** the channel map decides a candidate the router left undecided when its turn went idle, when its session failed or couldn't start, or after `ROUTER_DECISION_TIMEOUT_MS`. So every candidate is settled, even with the router down. A router created without `startSession` lets the channel map decide every candidate as soon as it's queued.
+- **Repo descriptions:** a repo's `description` in the config goes into the router's instructions, so it can tell repos apart.
+
 ## `@repo/core/tasks`
 
 Turns requests into Claude Code sessions. Each task gets a worktree of its own on `agent/<task id>`, and one session at a time through the Claude Agent SDK.
@@ -228,10 +268,11 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 
 - **A new request:** `startTask` queues a task that owns the thread and keeps the message as its first input. Nothing is posted until the worker acts.
 - **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
-- **Worker tools:** the worker reaches Slack only through three tools.
+- **Worker tools:** the worker reaches Slack only through four tools.
   - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
   - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
   - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
+  - `hand_back` gives the router a message that isn't about the task, with why. Each Slack message reaches the worker labeled `[message N]`, and the worker names the one it means. The task's own request can't be handed back.
 - **Follow-ups:** a reply in the task's thread, with or without an @-mention, becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
 - **Stop:** the word `stop` alone in the thread, or 🛑 on the task's first message or one of your messages there, marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
 - **Restarts:** a task left `running` is resumed from its stored session ID with every input it hadn't read, including recovery's restart note.

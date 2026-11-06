@@ -7,6 +7,7 @@
     "./outbox": "./src/outbox/index.ts",
     "./recovery": "./src/recovery/index.ts",
     "./repos": "./src/repos/index.ts",
+    "./router": "./src/router/index.ts",
     "./slack": "./src/slack/index.ts",
     "./store": "./src/store/index.ts",
     "./tasks": "./src/tasks/index.ts"
