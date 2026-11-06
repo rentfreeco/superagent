@@ -70,6 +70,28 @@ describe("threads", () => {
     expect(store.threads.ownedByTasksIn([])).toEqual([]);
   });
 
+  it("leaves out tasks that have been quiet since the given time", () => {
+    const { store, clock } = openTestStore();
+    const quietTask = newTask(store);
+    store.tasks.transition(quietTask.id, "running");
+    store.threads.claim({ ...thread, taskId: quietTask.id });
+    clock.now += 60_000;
+    const activeSince = clock.now;
+    const activeTask = newTask(store);
+    store.tasks.transition(activeTask.id, "running");
+    store.threads.claim({
+      channel: "C0123ABCD",
+      threadTs: "200.000001",
+      taskId: activeTask.id,
+    });
+
+    expect(
+      store.threads
+        .ownedByTasksIn(["running"], activeSince)
+        .map(({ taskId }) => taskId),
+    ).toEqual([activeTask.id]);
+  });
+
   it("never moves a thread from one task to another, or back to the router", () => {
     const { store } = openTestStore();
     const firstTask = newTask(store);

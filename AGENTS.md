@@ -90,7 +90,8 @@ packages/
         record-report.ts       recordReport: the report row, the state change, and the thread
                                post, in one transaction
         prepare-worktree.ts    prepareWorktree: agent/<task id> from the freshly fetched base
-                               branch, in $SUPERAGENT_DATA_DIR/worktrees/<task id>
+                               branch, in $SUPERAGENT_DATA_DIR/worktrees/<task id>, one
+                               checkout at a time
         worker-instructions.ts what the worker is told on top of Claude Code's own system prompt
         index.ts               the module's public exports
       utils/                   small helpers, one per file
@@ -175,8 +176,11 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 - MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
 - An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
+- A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
 - A turn that ends idle without a report posts the worker's last message and waits on the owner; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.
-- Stopping marks the task `stopped` and drops the inputs it hadn't read, in the handler's transaction; the runner then interrupts the session. The branch and worktree stay.
+- Stopping drops every input the worker hadn't read, in the handler's transaction, and marks the task `stopped` when its state allows. A `done`, `failed`, or `blocked` task keeps its state, but a retry still waiting for a session slot is cancelled. The runner then interrupts any live session. The branch and worktree stay.
+- Restart recovery catches up the threads of open tasks and of tasks that ended in the last seven days (`RECOVERY_ENDED_TASK_WINDOW_MS`), since a reply can resume an ended task and channel history doesn't include thread replies.
+- `git fetch origin <branch>` updates `origin/<branch>` only when the remote's fetch refspec covers it, which a single-branch or shallow clone's doesn't, and two fetches in one checkout at once fail on the ref lock. `prepareWorktree` fetches into an explicit `refs/remotes/origin/<branch>` and runs one checkout's git commands one at a time.
 - Workers run with `bypassPermissions`: they can run any command in their worktree as the service's user, and only the owner can reach them. Run the service where that is acceptable, such as its own container or machine.
 - MUST: Keep Slack tokens away from workers. `claude-session.ts` drops every `SLACK_` variable from the environment it passes on.
 - NEVER: start a real Claude Code session in tests. Pass a fake `StartConversation` to `createClaudeSessionStarter`, or a fake `StartWorkerSession` to `createTaskRunner`.

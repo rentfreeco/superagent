@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
+import type { OutboxMessage } from "../store/outbox.ts";
 import type { Store } from "../store/open-store.ts";
 import { openTestStore } from "../store/open-test-store.ts";
 import type { TaskState } from "../store/tasks.ts";
@@ -105,6 +106,20 @@ const setup = ({
     store.outbox
       .pending()
       .map(({ threadTs, message }) => ({ threadTs, message }));
+  const sendQueuedMessages = () => {
+    const sent: OutboxMessage[] = [];
+    for (
+      let dueEntries = store.outbox.pending();
+      dueEntries.length > 0;
+      dueEntries = store.outbox.pending()
+    ) {
+      for (const { id, message } of dueEntries) {
+        sent.push(message);
+        store.outbox.markSent(id, null);
+      }
+    }
+    return sent;
+  };
   const startRunner = async (expectedSessions: number) => {
     runner.start();
     await vi.waitFor(() => expect(sessions).toHaveLength(expectedSessions));
@@ -117,6 +132,7 @@ const setup = ({
     prepareWorktree,
     queuedPosts,
     runner,
+    sendQueuedMessages,
     sessions,
     startRunner,
     store,
@@ -294,6 +310,102 @@ describe("createTaskRunner", () => {
 
     expect(session.sent.at(-1)?.map(({ id }) => id)).toEqual([followUp?.id]);
     expect(session.end).not.toHaveBeenCalled();
+    expect(queuedPosts()).toEqual([]);
+  });
+
+  describe("when a follow-up lands after the worker reported", () => {
+    const reportThenQueueFollowUp = async () => {
+      const context = setup();
+      const task = context.createTask();
+      const assignment = context.addInput(task.id);
+      await context.startRunner(1);
+      const session = sessionAt(context.sessions, 0);
+      context.addInput(task.id, "also update the docs");
+      await context.runner.reconcile();
+      session.options.report({
+        state: "waiting",
+        summary: "Two tests share a port.",
+        question: "Which one moves?",
+      });
+      return { ...context, assignment, session, task };
+    };
+
+    it("moves the task back to running when the turn ends with the follow-up still queued, so the next turn's report posts", async () => {
+      const { assignment, sendQueuedMessages, session, store, task } =
+        await reportThenQueueFollowUp();
+
+      session.options.events.onTurnEnd(
+        idleTurn({ readInputIds: [assignment?.id ?? 0], isIdle: false }),
+      );
+      expect(stateOf(store, task.id)).toBe("running");
+      const nextTurnReport = session.options.report({
+        state: "done",
+        summary: "Docs updated.",
+      });
+
+      expect(nextTurnReport.isAccepted).toBe(true);
+      expect(stateOf(store, task.id)).toBe("done");
+      expect(sendQueuedMessages()).toEqual([
+        {
+          kind: "post",
+          text: "Two tests share a port.\n\n*Question:* Which one moves?",
+        },
+        { kind: "post", text: "Docs updated." },
+      ]);
+    });
+
+    it("posts the next turn's last words when it ends without a report", async () => {
+      const { assignment, sendQueuedMessages, session, store, task } =
+        await reportThenQueueFollowUp();
+
+      session.options.events.onTurnEnd(
+        idleTurn({ readInputIds: [assignment?.id ?? 0], isIdle: false }),
+      );
+      session.options.events.onTurnEnd(
+        idleTurn({ resultText: "Updated the docs too." }),
+      );
+
+      expect(stateOf(store, task.id)).toBe("waiting");
+      expect(sendQueuedMessages().at(-1)).toEqual({
+        kind: "post",
+        text: "Updated the docs too.\n\n*Question:* How should I go on?",
+      });
+    });
+
+    it("takes the worker's next report in the same turn, when the follow-up was folded in after its first", async () => {
+      const { sendQueuedMessages, session, store, task } =
+        await reportThenQueueFollowUp();
+
+      const secondReport = session.options.report({
+        state: "done",
+        summary: "Moved one test and updated the docs.",
+      });
+
+      expect(secondReport.isAccepted).toBe(true);
+      expect(stateOf(store, task.id)).toBe("done");
+      expect(sendQueuedMessages()).toHaveLength(2);
+    });
+  });
+
+  it("never reopens a stopped task for a queued turn, a delivery, or a late report", async () => {
+    const { addInput, createTask, queuedPosts, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    store.tasks.transition(task.id, "stopped");
+
+    session.options.events.onTurnEnd(idleTurn({ isIdle: false }));
+    addInput(task.id, "one more thing");
+    session.options.events.onTurnEnd(idleTurn({}));
+    const lateReport = session.options.report({
+      state: "done",
+      summary: "Finished anyway.",
+    });
+
+    expect(lateReport.isAccepted).toBe(false);
+    expect(stateOf(store, task.id)).toBe("stopped");
     expect(queuedPosts()).toEqual([]);
   });
 

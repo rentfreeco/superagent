@@ -5,7 +5,7 @@ import {
 } from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import type { Store } from "../store/open-store.ts";
-import { TASK_TRANSITIONS, type Task } from "../store/tasks.ts";
+import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
 import type {
@@ -20,6 +20,7 @@ import {
 } from "./prepare-worktree.ts";
 import {
   recordReport,
+  REPORT_STATES,
   type ReportOutcome,
   type WorkerReport,
 } from "./record-report.ts";
@@ -53,6 +54,9 @@ interface LiveSession {
   isEnding: boolean;
 }
 
+const isReportedState = (state: TaskState): boolean =>
+  REPORT_STATES.some((reportState) => reportState === state);
+
 const fallbackSummary = (text: string, whenEmpty: string): string =>
   truncateText(text.trim() || whenEmpty, TASK_FALLBACK_SUMMARY_MAX_LENGTH);
 
@@ -73,15 +77,6 @@ export const createTaskRunner = ({
   let isRunning = false;
   let pollTimer: NodeJS.Timeout | undefined;
 
-  const report = (
-    taskId: string,
-    workerReport: WorkerReport,
-  ): ReportOutcome => {
-    const outcome = recordReport({ store, taskId, report: workerReport });
-    if (outcome.isAccepted) wakeOutbox();
-    return outcome;
-  };
-
   const moveToRunning = (taskId: string): void => {
     const task = store.tasks.get(taskId);
     if (task === undefined || task.state === "running") return;
@@ -90,11 +85,40 @@ export const createTaskRunner = ({
     }
   };
 
+  const reopenReportedTask = (taskId: string): void => {
+    const task = store.tasks.get(taskId);
+    if (task !== undefined && isReportedState(task.state)) {
+      store.tasks.transition(taskId, "running");
+    }
+  };
+
+  const settleReport = (outcome: ReportOutcome): ReportOutcome => {
+    if (outcome.isAccepted) wakeOutbox();
+    return outcome;
+  };
+
+  const postReport = (
+    taskId: string,
+    workerReport: WorkerReport,
+  ): ReportOutcome =>
+    settleReport(recordReport({ store, taskId, report: workerReport }));
+
+  const postWorkerReport = (
+    taskId: string,
+    workerReport: WorkerReport,
+  ): ReportOutcome =>
+    settleReport(
+      store.transaction(() => {
+        reopenReportedTask(taskId);
+        return recordReport({ store, taskId, report: workerReport });
+      }),
+    );
+
   const deliver = (taskId: string, live: LiveSession): void => {
     const inputs = store.inputs.undelivered(taskId);
     if (inputs.length === 0) return;
     store.transaction(() => {
-      moveToRunning(taskId);
+      reopenReportedTask(taskId);
       store.inputs.markDelivered(inputs.map(({ id }) => id));
     });
     live.session.send(inputs);
@@ -106,12 +130,16 @@ export const createTaskRunner = ({
     turn: WorkerTurn,
   ): void => {
     store.inputs.markRead(turn.readInputIds);
-    if (!turn.isIdle || live.isEnding) return;
+    if (live.isEnding) return;
+    if (!turn.isIdle) {
+      reopenReportedTask(taskId);
+      return;
+    }
     if (store.inputs.undelivered(taskId).length > 0) {
       deliver(taskId, live);
       return;
     }
-    report(
+    postReport(
       taskId,
       turn.isError
         ? {
@@ -142,7 +170,7 @@ export const createTaskRunner = ({
         `tasks: ${taskId}'s session failed: ${describeError(error)}`,
       );
     }
-    report(taskId, {
+    postReport(taskId, {
       state: "failed",
       summary:
         error === undefined
@@ -211,7 +239,7 @@ export const createTaskRunner = ({
         repo,
         worktree,
         inputs,
-        report: (workerReport) => report(task.id, workerReport),
+        report: (workerReport) => postWorkerReport(task.id, workerReport),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live
@@ -228,7 +256,7 @@ export const createTaskRunner = ({
       store.inputs.markDelivered(
         store.inputs.undelivered(task.id).map(({ id }) => id),
       );
-      report(task.id, {
+      postReport(task.id, {
         state: "failed",
         summary: `Couldn't start: ${describeError(error)}`,
       });

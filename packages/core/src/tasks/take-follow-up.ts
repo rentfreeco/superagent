@@ -20,30 +20,42 @@ export type FollowUpDisposition = Extract<
   "task_input" | "stopped_task"
 >;
 
+type StopOutcome = "stopped" | "cancelled" | "unchanged";
+
 const STOP_REQUEST = /^stop[.!]?$/i;
 
-const describeStop = (task: Task, didStop: boolean): string => {
-  if (!didStop) return `Nothing to stop: this task is already ${task.state}.`;
-  return task.branch === null
-    ? "Stopped before any work started."
-    : `Stopped. The branch \`${task.branch}\` is kept.`;
+const describeStop = (task: Task, outcome: StopOutcome): string => {
+  switch (outcome) {
+    case "stopped":
+      return task.branch === null
+        ? "Stopped before any work started."
+        : `Stopped. The branch \`${task.branch}\` is kept.`;
+    case "cancelled":
+      return `Cancelled. This task stays ${task.state}, and the messages waiting for it are dropped.`;
+    case "unchanged":
+      return `Nothing to stop: this task is already ${task.state}.`;
+  }
 };
 
 const stopTask = ({ message, taskId, store }: FollowUp): void => {
   const task = store.tasks.get(taskId);
   if (task === undefined) throw new Error(`No task ${taskId}`);
+  const hasWaitingInput = store.inputs.undelivered(taskId).length > 0;
   const canStop = TASK_TRANSITIONS[task.state].includes("stopped");
-  if (canStop) {
-    store.tasks.transition(taskId, "stopped");
-    const discardedInputIds = store.inputs.unread(taskId).map(({ id }) => id);
-    store.inputs.markDelivered(discardedInputIds);
-    store.inputs.markRead(discardedInputIds);
-  }
+  if (canStop) store.tasks.transition(taskId, "stopped");
+  const droppedInputIds = store.inputs.unread(taskId).map(({ id }) => id);
+  store.inputs.markDelivered(droppedInputIds);
+  store.inputs.markRead(droppedInputIds);
+  const outcome: StopOutcome = canStop
+    ? "stopped"
+    : hasWaitingInput
+      ? "cancelled"
+      : "unchanged";
   store.outbox.enqueue({
     dedupeKey: `stop:${message.eventId}`,
     channel: message.channel,
     threadTs: message.threadTs,
-    message: { kind: "post", text: describeStop(task, canStop) },
+    message: { kind: "post", text: describeStop(task, outcome) },
   });
 };
 

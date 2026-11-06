@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Repo } from "../repos/config.ts";
 import { runGit } from "../utils/run-git.ts";
 import { prepareWorktree } from "./prepare-worktree.ts";
 
@@ -39,16 +38,19 @@ const setup = async () => {
   await commitFile(checkout, "README.md");
   await runGit(checkout, ["push", "origin", "main"]);
   await runGit(root, ["clone", origin, otherClone]);
-  const repo: Repo = {
-    name: "superagent",
-    github: "pakgin/superagent",
-    path: checkout,
-    baseBranch: "main",
-  };
   const worktreesDirectory = path.join(root, "data", "worktrees");
-  const prepare = () =>
-    prepareWorktree({ repo, taskId: "abcd2345", worktreesDirectory });
-  return { checkout, otherClone, prepare, worktreesDirectory };
+  const prepare = (taskId = "abcd2345", repoPath = checkout) =>
+    prepareWorktree({
+      repo: {
+        name: "superagent",
+        github: "pakgin/superagent",
+        path: repoPath,
+        baseBranch: "main",
+      },
+      taskId,
+      worktreesDirectory,
+    });
+  return { checkout, origin, otherClone, prepare, root, worktreesDirectory };
 };
 
 describe("prepareWorktree", () => {
@@ -70,6 +72,44 @@ describe("prepareWorktree", () => {
     await expect(
       runGit(worktree.path, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
     ).rejects.toThrow(/no upstream/);
+  });
+
+  it("works from a checkout cloned with only another branch", async () => {
+    const { checkout, origin, prepare, root } = await setup();
+    const latestMain = await runGit(checkout, ["rev-parse", "HEAD"]);
+    await runGit(checkout, ["switch", "-c", "develop"]);
+    await commitFile(checkout, "DEVELOP.md");
+    await runGit(checkout, ["push", "origin", "develop"]);
+    const developOnly = path.join(root, "develop-only");
+    await runGit(root, [
+      "clone",
+      "--single-branch",
+      "--branch",
+      "develop",
+      origin,
+      developOnly,
+    ]);
+
+    const worktree = await prepare("abcd2345", developOnly);
+
+    expect(await runGit(worktree.path, ["rev-parse", "HEAD"])).toBe(latestMain);
+  });
+
+  it("prepares worktrees for tasks of the same repo that start at the same time", async () => {
+    const { otherClone, prepare } = await setup();
+
+    for (const round of ["one", "two", "three"]) {
+      await commitFile(otherClone, `${round}.md`);
+      await runGit(otherClone, ["push", "origin", "main"]);
+      const worktrees = await Promise.all([
+        prepare(`${round}aaaaa`),
+        prepare(`${round}bbbbb`),
+      ]);
+      expect(worktrees.map(({ branch }) => branch)).toEqual([
+        `agent/${round}aaaaa`,
+        `agent/${round}bbbbb`,
+      ]);
+    }
   });
 
   it("returns a worktree that already exists as it is", async () => {

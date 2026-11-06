@@ -21,7 +21,7 @@ export const workerInstructions = ({
     `- When you need a decision from the owner, report state "waiting" with one concrete question. Their answer arrives as your next message.`,
     `- When the request needs no code change, such as a question about the code, report state "done" with the answer as the summary.`,
     `- When you can't go on without something from the owner, such as access or a broken environment, report state "blocked" with what you need. When the request can't be done at all, report state "failed" with why.`,
-    "- After you report, end your turn.",
+    "- After you report, end your turn. If a message from the owner arrives after your report, deal with it and report again.",
     "- Messages from the owner can arrive while you work. Take them into account.",
     "- The report is all the owner sees in Slack. Keep the summary short, and leave the details to the pull request.",
   ].join("\n");

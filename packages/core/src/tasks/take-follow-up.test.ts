@@ -122,6 +122,29 @@ describe("takeFollowUp", () => {
     });
   });
 
+  it("cancels a retry of an ended task that hasn't started yet, leaving the task as it was", () => {
+    const { queuedMessages, store, task } = setup("failed");
+    takeFollowUp({
+      message: followUpMessage({ eventId: "EvRetry", text: "try again" }),
+      taskId: task.id,
+      store,
+    });
+
+    takeFollowUp({
+      message: followUpMessage({ text: "stop" }),
+      taskId: task.id,
+      store,
+    });
+
+    expect(store.tasks.get(task.id)?.state).toBe("failed");
+    expect(store.inputs.tasksWithUndelivered()).toEqual([]);
+    expect(store.inputs.unread(task.id)).toEqual([]);
+    expect(queuedMessages().at(-1)?.message).toEqual({
+      kind: "post",
+      text: "Cancelled. This task stays failed, and the messages waiting for it are dropped.",
+    });
+  });
+
   it("treats stop inside a longer message as an ordinary input", () => {
     const { store, task } = setup();
     expect(
