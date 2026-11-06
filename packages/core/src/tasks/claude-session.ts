@@ -1,8 +1,11 @@
 import { randomUUID, type UUID } from "node:crypto";
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   createSdkMcpServer,
   type Options,
   query,
+  type SandboxSettings,
   type SDKUserMessage,
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -19,6 +22,7 @@ import {
   type ReportOutcome,
   type WorkerReport,
 } from "./record-report.ts";
+import { createWorkerGuard } from "./worker-guard.ts";
 import { workerInstructions } from "./worker-instructions.ts";
 
 export interface WorkerTurn {
@@ -73,9 +77,77 @@ export type StartConversation = (
 export interface ClaudeSessionStarterOptions {
   startConversation?: StartConversation;
   environment?: Readonly<Record<string, string | undefined>>;
+  homeDirectory?: string;
+  /** Run the worker's shell commands in Claude Code's sandbox. */
+  sandbox?: boolean;
 }
 
-export const REPORT_SERVER_NAME = "superagent";
+export const WORKER_SERVER_NAME = "superagent";
+
+const WORKER_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "Edit",
+  "MultiEdit",
+  "Write",
+  "NotebookEdit",
+  "Bash",
+  "BashOutput",
+  "KillShell",
+  "Agent",
+  "Task",
+  "TodoWrite",
+  "WebFetch",
+  "WebSearch",
+  "Skill",
+  ...["ack", "read_thread", "report"].map(
+    (toolName) => `mcp__${WORKER_SERVER_NAME}__${toolName}`,
+  ),
+];
+
+const WORKER_ENVIRONMENT_NAMES = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "TZ",
+  "TMPDIR",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_RUNTIME_DIR",
+  "CLAUDE_CONFIG_DIR",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "SSH_AUTH_SOCK",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+  "NODE_EXTRA_CA_CERTS",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+]);
+
+const WORKER_ENVIRONMENT_PREFIXES = ["LC_", "ANTHROPIC_", "CLAUDE_CODE_"];
+
+const WORKER_SANDBOX_DOMAINS = [
+  "github.com",
+  "*.github.com",
+  "*.githubusercontent.com",
+  "registry.npmjs.org",
+  "registry.yarnpkg.com",
+  "pypi.org",
+  "files.pythonhosted.org",
+  "proxy.golang.org",
+  "crates.io",
+  "*.crates.io",
+];
 
 const sessionInitSchema = z.object({
   type: z.literal("system"),
@@ -104,12 +176,28 @@ const toPrompt = ({ source, text }: TaskInput, uuid: UUID): SDKUserMessage => ({
   uuid,
 });
 
-const withoutSlackSettings = (
+const workerEnvironment = (
   environment: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> =>
   Object.fromEntries(
-    Object.entries(environment).filter(([name]) => !name.startsWith("SLACK_")),
+    Object.entries(environment).filter(
+      ([name]) =>
+        WORKER_ENVIRONMENT_NAMES.has(name) ||
+        WORKER_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix)),
+    ),
   );
+
+const workerSandbox = (
+  worktree: Worktree,
+  gitDirectory: string,
+): SandboxSettings => ({
+  enabled: true,
+  failIfUnavailable: true,
+  autoAllowBashIfSandboxed: true,
+  allowUnsandboxedCommands: false,
+  network: { allowedDomains: WORKER_SANDBOX_DOMAINS },
+  filesystem: { allowWrite: [worktree.path, gitDirectory] },
+});
 
 export const createAckTool = (ack: WorkerSessionOptions["ack"]) =>
   tool(
@@ -175,8 +263,11 @@ export const createClaudeSessionStarter =
   ({
     startConversation = query,
     environment = process.env,
+    homeDirectory = homedir(),
+    sandbox = false,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
   ({ task, repo, worktree, inputs, ack, readThread, report, events }) => {
+    const gitDirectory = path.join(repo.path, ".git");
     const prompts = createAsyncQueue<SDKUserMessage>();
     const unreadInputIds = new Map<string, number>();
 
@@ -229,8 +320,24 @@ export const createClaudeSessionStarter =
         resume: task.sessionId ?? undefined,
         model: WORKER_MODEL,
         effort: WORKER_EFFORT,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
+        permissionMode: "dontAsk",
+        allowedTools: WORKER_TOOLS,
+        hooks: {
+          PreToolUse: [
+            {
+              hooks: [
+                createWorkerGuard({
+                  worktreePath: worktree.path,
+                  gitDirectory,
+                  baseBranch: repo.baseBranch,
+                  homeDirectory,
+                }),
+              ],
+              onFailure: "block",
+            },
+          ],
+        },
+        ...(sandbox ? { sandbox: workerSandbox(worktree, gitDirectory) } : {}),
         settingSources: ["project"],
         systemPrompt: {
           type: "preset",
@@ -238,8 +345,8 @@ export const createClaudeSessionStarter =
           append: workerInstructions({ task, repo, worktree }),
         },
         mcpServers: {
-          [REPORT_SERVER_NAME]: createSdkMcpServer({
-            name: REPORT_SERVER_NAME,
+          [WORKER_SERVER_NAME]: createSdkMcpServer({
+            name: WORKER_SERVER_NAME,
             version: "1.0.0",
             tools: [
               createAckTool(ack),
@@ -248,7 +355,7 @@ export const createClaudeSessionStarter =
             ],
           }),
         },
-        env: withoutSlackSettings(environment),
+        env: workerEnvironment(environment),
         title: task.title,
       },
     });

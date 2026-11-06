@@ -9,7 +9,7 @@ import {
   createClaudeSessionStarter,
   createReadThreadTool,
   createReportTool,
-  REPORT_SERVER_NAME,
+  WORKER_SERVER_NAME,
   type StartConversation,
   type WorkerConversation,
 } from "./claude-session.ts";
@@ -62,10 +62,12 @@ const setup = ({
   task = queuedTask,
   conversationMessages = createAsyncQueue<unknown>(),
   iterate = () => conversationMessages[Symbol.asyncIterator](),
+  sandbox = false,
 }: {
   task?: Task;
   conversationMessages?: ReturnType<typeof createAsyncQueue<unknown>>;
   iterate?: WorkerConversation[typeof Symbol.asyncIterator];
+  sandbox?: boolean;
 } = {}) => {
   const requests: ConversationRequest[] = [];
   const conversation = {
@@ -86,10 +88,16 @@ const setup = ({
     startConversation,
     environment: {
       PATH: "/usr/bin",
+      LC_ALL: "en_US.UTF-8",
       ANTHROPIC_API_KEY: "sk-ant-test",
+      GH_TOKEN: "ghp_test",
       SLACK_BOT_TOKEN: "xoxb-secret",
       SLACK_APP_TOKEN: "xapp-secret",
+      AWS_SECRET_ACCESS_KEY: "aws-secret",
+      SUPERAGENT_DATA_DIR: "/data",
     },
+    homeDirectory: "/home/agent",
+    sandbox,
   })({
     task,
     repo: superagentRepo,
@@ -125,7 +133,7 @@ const setup = ({
 };
 
 describe("createClaudeSessionStarter", () => {
-  it("starts an unattended Claude Code session in the worktree, without the Slack tokens", () => {
+  it("starts an unattended Claude Code session in the worktree, with only the environment it needs", () => {
     const { request } = setup();
 
     expect(request.options).toMatchObject({
@@ -133,23 +141,77 @@ describe("createClaudeSessionStarter", () => {
       resume: undefined,
       model: "claude-opus-5-5",
       effort: "high",
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      permissionMode: "dontAsk",
       settingSources: ["project"],
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
         append: expect.stringContaining("git push -u origin agent/abcd2345"),
       },
-      env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant-test" },
       title: "fix the flaky test",
     });
-    expect(Object.keys(request.options.env ?? {})).not.toContain(
-      "SLACK_BOT_TOKEN",
+    expect(request.options.env).toEqual({
+      PATH: "/usr/bin",
+      LC_ALL: "en_US.UTF-8",
+      ANTHROPIC_API_KEY: "sk-ant-test",
+      GH_TOKEN: "ghp_test",
+    });
+    expect(request.options).not.toHaveProperty(
+      "allowDangerouslySkipPermissions",
     );
+    expect(request.options).not.toHaveProperty("sandbox");
     expect(Object.keys(request.options.mcpServers ?? {})).toEqual([
-      REPORT_SERVER_NAME,
+      WORKER_SERVER_NAME,
     ]);
+  });
+
+  it("allows only its working tools, including the three superagent ones, and guards each call", async () => {
+    const { request } = setup();
+
+    expect(request.options.allowedTools).toEqual(
+      expect.arrayContaining([
+        "Read",
+        "Edit",
+        "Bash",
+        "mcp__superagent__ack",
+        "mcp__superagent__read_thread",
+        "mcp__superagent__report",
+      ]),
+    );
+    expect(request.options.allowedTools).not.toContain("AskUserQuestion");
+    const [matcher] = request.options.hooks?.PreToolUse ?? [];
+    expect(matcher?.onFailure).toBe("block");
+    const [guard] = matcher?.hooks ?? [];
+    const decision = await guard?.(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s-1",
+        transcript_path: "/tmp/transcript.jsonl",
+        cwd: "/data/worktrees/abcd2345",
+        tool_name: "Write",
+        tool_input: { file_path: "/code/superagent/src/index.ts" },
+        tool_use_id: "toolu_1",
+      },
+      "toolu_1",
+      { signal: new AbortController().signal },
+    );
+    expect(decision).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    });
+  });
+
+  it("runs shell commands in the sandbox when asked, writing only to the worktree and the checkout's git directory", () => {
+    const { request } = setup({ sandbox: true });
+
+    expect(request.options.sandbox).toMatchObject({
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      network: { allowedDomains: expect.arrayContaining(["github.com"]) },
+      filesystem: {
+        allowWrite: ["/data/worktrees/abcd2345", "/code/superagent/.git"],
+      },
+    });
   });
 
   it("resumes the task's session when it has one", () => {

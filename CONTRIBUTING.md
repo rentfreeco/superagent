@@ -103,20 +103,21 @@ Each task runs a Claude Code session through the Claude Agent SDK, in a worktree
 - **Claude Code credentials:** a `claude` login on that machine, or `ANTHROPIC_API_KEY` in `apps/agent/.env`.
 - **GitHub access:** `gh auth login`, and git able to push to each configured repo, since workers push their branch and open the pull request themselves.
 
-Workers run with Claude Code's permission checks off, so they can run any command in their worktree as your user. While developing, map your channel to a scratch repo rather than one you care about.
+Workers don't ask before acting. A guard refuses merges, force pushes, pushes to the base branch, writes outside the worktree, and credential reads, but their shell commands still run as your user unless `SUPERAGENT_WORKER_SANDBOX=on`. While developing, map your channel to a scratch repo rather than one you care about.
 
 ### Environment variables
 
 The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `apps/agent/.env.example` and fill it in:
 
-| Variable              | Value                                                                         |
-| --------------------- | ----------------------------------------------------------------------------- |
-| `SLACK_BOT_TOKEN`     | the Bot User OAuth Token, `xoxb-…`                                            |
-| `SLACK_APP_TOKEN`     | the app-level token with `connections:write`, `xapp-…`                        |
-| `SLACK_OWNER_ID`      | your member ID, `U…`                                                          |
-| `LOG_LEVEL`           | optional: `debug`, `info` (the default), `warn`, or `error`                   |
-| `SUPERAGENT_DATA_DIR` | optional: where the store and task worktrees live; `~/.superagent` by default |
-| `ANTHROPIC_API_KEY`   | optional: Claude Code's credentials; unset uses your `claude` login           |
+| Variable                    | Value                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `SLACK_BOT_TOKEN`           | the Bot User OAuth Token, `xoxb-…`                                                     |
+| `SLACK_APP_TOKEN`           | the app-level token with `connections:write`, `xapp-…`                                 |
+| `SLACK_OWNER_ID`            | your member ID, `U…`                                                                   |
+| `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                            |
+| `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live; `~/.superagent` by default          |
+| `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                    |
+| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default |
 
 The bot checks all of them at startup and stops with an error naming each one that is missing or malformed, such as the two tokens swapped. `LOG_LEVEL=debug` also logs every event the owner gate drops, which helps when the bot seems to ignore a message. Never commit a token.
 

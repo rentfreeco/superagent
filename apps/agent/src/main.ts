@@ -65,7 +65,9 @@ const main = async (): Promise<void> => {
     store,
     repos: new Map([...channelRepos.values()].map((repo) => [repo.name, repo])),
     worktreesDirectory,
-    startSession: createClaudeSessionStarter(),
+    startSession: createClaudeSessionStarter({
+      sandbox: environment.workerSandbox,
+    }),
     wakeOutbox: outboxSender.wake,
     logger: console,
     ownerUserId: environment.slackOwnerId,

@@ -18,7 +18,18 @@ describe("parseEnvironment", () => {
       slackOwnerId: "U0123ABCD",
       logLevel: LogLevel.INFO,
       dataDirectory: path.join(homedir(), ".superagent"),
+      workerSandbox: false,
     });
+  });
+
+  it("turns the worker sandbox on only for SUPERAGENT_WORKER_SANDBOX=on", () => {
+    expect(
+      parseEnvironment({ ...slackVariables, SUPERAGENT_WORKER_SANDBOX: "on" })
+        .workerSandbox,
+    ).toBe(true);
+    expect(() =>
+      parseEnvironment({ ...slackVariables, SUPERAGENT_WORKER_SANDBOX: "yes" }),
+    ).toThrow(/must be on or off[\s\S]*SUPERAGENT_WORKER_SANDBOX/);
   });
 
   it("takes the data directory from SUPERAGENT_DATA_DIR, resolved to an absolute path", () => {
