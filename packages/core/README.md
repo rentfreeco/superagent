@@ -14,6 +14,9 @@ const slack = await SlackGateway.connect({
   appToken, // xapp-…
   ownerUserId, // U…
   eventLog: store.events,
+  // Replies in these threads reach onMessage without an @-mention.
+  isFollowedThread: (channel, threadTs) =>
+    Boolean(store.threads.owner(channel, threadTs)?.taskId),
   onMessage: (message) => {
     store.transaction(() => {
       store.outbox.enqueue({
@@ -25,6 +28,10 @@ const slack = await SlackGateway.connect({
       store.events.setDisposition(message.eventId, "replied");
     });
     outboxSender.wake();
+  },
+  // Every reaction that reaches here needs settling, even one it ignores.
+  onReaction: (reaction) => {
+    store.events.setDisposition(reaction.eventId, "ignored");
   },
 });
 outboxSender.start(slack);
