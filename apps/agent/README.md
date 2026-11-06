@@ -14,11 +14,10 @@ On startup it opens the store at `$SUPERAGENT_DATA_DIR/state.db` (`~/.superagent
 
 ## What it does with a message
 
-- **A mention in a mapped channel** starts a task: a Claude Code session works on it in its own worktree, puts 👀 on your message when it starts on it, and can read the thread for context. Its report comes back in the thread: a pull request link, a question, an answer, or what went wrong.
+- **A DM, or a mention outside a task's thread,** goes to the router, which starts a task in the repo it's about, answers, asks one question, passes it to a task it points at, stops one, or lets it be. With `SUPERAGENT_ROUTER=off`, or when the router can't decide, the channel map decides: a mention in a mapped channel starts a task there, a DM gets a reply listing the repo channels, and a mention in an unmapped channel gets the config line to add.
+- **A started task** gets a Claude Code session that works on it in its own worktree, puts 👀 on your message when it starts on it, and can read the thread for context. Its report comes back in the thread: a pull request link, a question, an answer, or what went wrong.
 - **A reply in a task's thread,** with or without an @-mention, goes to that task's worker, which puts 👀 on it when it gets to it. `stop` on its own, or 🛑 on the task's first message, stops the task and keeps its branch.
-- **A DM** gets a reply listing the repo channels.
-- **A mention in an unmapped channel** gets a reply with the config line to add.
 
-Nothing is posted directly. The handler writes the task, input, or reply rows and settles the event (`routed`, `task_input`, `stopped_task`, or `replied`) in one transaction, then wakes the outbox sender and the task runner. If handling throws, nothing is written and the event stays `received`, which marks it for a retry after a restart.
+Nothing is posted directly. The handler writes the task input or the router candidate, or with the router off the task or reply rows, in one transaction, then wakes the outbox sender, the task runner, and the router. A candidate's event stays `received` until the router's decision settles it. If handling throws, nothing is written and the event stays `received`, which marks it for a retry after a restart.
 
 Startup stops with a message, and exit code 1, when a setting is missing or malformed, when `superagent.config.ts` doesn't exist, or when the config is invalid.

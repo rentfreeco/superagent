@@ -91,7 +91,7 @@ A change that needs a new scope or event updates the manifest in the same pull r
 
 Which repo a request is about comes from the channel it is sent in. Copy `superagent.config.example.ts` to `superagent.config.ts`, which is git-ignored, and fill it in:
 
-- `repos`: one entry per repo, with its GitHub `owner/name`, the path to a local git checkout (relative to the config file, or starting with `~`), and its base branch.
+- `repos`: one entry per repo, with its GitHub `owner/name`, the path to a local git checkout (relative to the config file, or starting with `~`), its base branch, and optionally a `description` the router reads to tell repos apart.
 - `channels`: Slack channel ID → repo name. Use the ID, not the channel name: open the channel, click its name, and copy the ID from the bottom of the **About** tab. Then invite the bot to the channel with `/invite @superagent`.
 
 The config is validated when it loads, and a mistake stops startup with an error that names it: a misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a path that isn't a git checkout. In a mapped channel, @-mention the bot. A DM, or a mention in an unmapped channel, gets a reply saying what to do instead.
@@ -109,15 +109,16 @@ Workers don't ask before acting. A guard refuses merges, force pushes, pushes to
 
 The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `apps/agent/.env.example` and fill it in:
 
-| Variable                    | Value                                                                                  |
-| --------------------------- | -------------------------------------------------------------------------------------- |
-| `SLACK_BOT_TOKEN`           | the Bot User OAuth Token, `xoxb-…`                                                     |
-| `SLACK_APP_TOKEN`           | the app-level token with `connections:write`, `xapp-…`                                 |
-| `SLACK_OWNER_ID`            | your member ID, `U…`                                                                   |
-| `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                            |
-| `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live; `~/.superagent` by default          |
-| `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                    |
-| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default |
+| Variable                    | Value                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `SLACK_BOT_TOKEN`           | the Bot User OAuth Token, `xoxb-…`                                                               |
+| `SLACK_APP_TOKEN`           | the app-level token with `connections:write`, `xapp-…`                                           |
+| `SLACK_OWNER_ID`            | your member ID, `U…`                                                                             |
+| `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                                      |
+| `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live; `~/.superagent` by default                    |
+| `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                              |
+| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default           |
+| `SUPERAGENT_ROUTER`         | optional: `off` routes every new message by the channel map, without the router; `on` by default |
 
 The bot checks all of them at startup and stops with an error naming each one that is missing or malformed, such as the two tokens swapped. `LOG_LEVEL=debug` also logs every event the owner gate drops, which helps when the bot seems to ignore a message. Never commit a token.
 

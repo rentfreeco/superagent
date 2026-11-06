@@ -79,6 +79,8 @@ Left:
 
 ### M3 — Router (in progress)
 
+Done in #13: the candidates and decisions tables, the decision functions with the channel-map fallback, the router session and its loop, the handler handing new messages to it, `SUPERAGENT_ROUTER`, and repo descriptions. Left: the worker's `hand_back` tool, and a live run.
+
 - **A long-lived router session:** its ID kept in the store, low effort, and only routing tools: no shell and no file reads.
 - **It sees** every owner message no task owns: DMs, mentions outside task threads, and hand-backs. Each comes with the channel's repo, the thread, and related tasks.
 - **Its tools:**

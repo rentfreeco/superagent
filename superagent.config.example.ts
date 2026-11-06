@@ -6,6 +6,7 @@ export default defineConfig({
       github: "pakgin/superagent",
       path: "~/code/superagent",
       baseBranch: "main",
+      description: "The Slack coding agent itself",
     },
   },
   channels: {

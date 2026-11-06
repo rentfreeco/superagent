@@ -68,6 +68,10 @@ packages/
         reports.ts             what each worker last said
         outbox.ts              what must reach Slack, with dedupe keys and retry backoff
         kv.ts                  JSON values by key, read back through a zod schema
+        candidates.ts          owner messages no task owns, waiting for the router, once per
+                               message and once more per task that hands one back
+        decisions.ts           what was decided for each candidate, why, and by the router or
+                               the fallback; at most one per candidate
         open-test-store.ts     an in-memory store with a settable clock, for tests
       outbox/                  @repo/core/outbox: turns outbox rows into Slack posts
         sender.ts              createOutboxSender: one pass at a time, woken on enqueue and
@@ -77,7 +81,23 @@ packages/
         recover.ts             recoverAfterRestart: replay unfinished events, tell running
                                tasks about the restart, catch up on what was sent while down
         index.ts               the module's public exports
+      router/                  @repo/core/router: what happens to a message no task owns
+        decide.ts              start_task, reply, attach, stop, ignore: each records the
+                               decision, writes its rows, settles the event, in one transaction
+        decide-by-channel-map.ts the fallback: today's channel-map routing, replying when it
+                               can't start a task, so every candidate gets a decision
+        router.ts              createRouter: one router session, resumed by its kv session ID;
+                               candidates in, fallback on an idle turn, a crash, or a timeout
+        router-session.ts      createRouterSessionStarter: no built-in tools, no settings
+                               files, dontAsk with only the routing tools
+        router-tools.ts        the routing tools, and list_tasks
+        router-instructions.ts the router's system prompt and each candidate's card
+        queue-candidate.ts     queueCandidate: the handler's side
+        list-tasks.ts          listTasks: one line per task, for status questions
+        index.ts               the module's public exports
       tasks/                   @repo/core/tasks: Claude Code sessions that work on tasks
+        agent-session.ts       startAgentSession: one Agent SDK query fed by streamed prompts,
+                               and which prompts each turn read; the worker and router use it
         start-task.ts          startTask: a queued task that owns the thread, with the message
                                as its first input
         take-follow-up.ts      takeFollowUp: a message in a task's thread becomes an input, or,
@@ -117,18 +137,20 @@ apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
       main.ts                  startup: environment, config, store, the recovery snapshot,
-                               connect, outbox sender, recovery, then the task runner; on
-                               SIGINT / SIGTERM closes the sessions, disconnects, and closes
-                               the store
+                               connect, outbox sender, recovery, then the task runner and the
+                               router; on SIGINT / SIGTERM closes the sessions, disconnects,
+                               and closes the store
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
                                SUPERAGENT_DATA_DIR, checked with zod
       handle-message.ts        createMessageHandler: in one transaction, give a message in a
-                               task's thread to takeFollowUp, or route it and queue the reply
-                               or call startTask; settle the event; wake the outbox and runner
+                               task's thread to takeFollowUp, or queue it for the router (or,
+                               with the router off, route it by the channel map); wake the
+                               outbox, the runner, and the router
       handle-reaction.ts       createReactionHandler: takeReaction in one transaction, settle
                                the event, wake the outbox and runner
       constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
-                               STORE_FILE_NAME, and WORKTREES_DIRECTORY_NAME
+                               STORE_FILE_NAME, WORKTREES_DIRECTORY_NAME, and
+                               ROUTER_DIRECTORY_NAME
     .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
@@ -201,6 +223,16 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 - The guard splits a shell command into the words of each command it runs (`utils/split-shell-commands.ts`, including `sh -c`, `$(…)`, and subshells), so a quoted PR body or commit message that mentions `gh pr merge` passes. It checks every word of each command, so a keyword or wrapper in front (`if`, `env -i`, `xargs`) doesn't hide one, and an unquoted mention such as `echo gh pr merge` is refused. It is still a guard rail, not a boundary: a command it can't see into, such as one built in a variable, gets past it. Bash can still reach whatever the service's user can, unless `SUPERAGENT_WORKER_SANDBOX=on` runs shell commands in Claude Code's sandbox, with writes limited to the worktree and the checkout's `.git` and network limited to GitHub and package registries. Run the service where that is acceptable, such as its own container or machine.
 - MUST: Pass workers only the environment they need. `claude-session.ts` keeps an allowlist (`WORKER_ENVIRONMENT_NAMES` and its prefixes): add a variable there, never pass the whole environment.
 - NEVER: start a real Claude Code session in tests. Pass a fake `StartConversation` to `createClaudeSessionStarter`, or a fake `StartWorkerSession` to `createTaskRunner`.
+
+## Router
+
+Every owner message no task owns, a DM or a mention outside a task's thread, is a candidate for the router (`@repo/core/router`): one Claude session that only routes.
+
+- MUST: Give every candidate exactly one decision, through the functions in `decide.ts`. Each records the decision, writes its rows, and settles the event in one transaction, and refuses a candidate already decided.
+- MUST: Keep the router to routing. Its session has no built-in tools, loads no settings files, and is allowed only the routing tools. Never give it a tool that reads code or runs commands; the worker owns the work.
+- When the router doesn't decide a candidate (its turn goes idle, its session fails or can't start, or the candidate waits past `ROUTER_DECISION_TIMEOUT_MS`), the channel map decides it, recorded as `decidedBy: "fallback"`.
+- The handler leaves a candidate's event `received` until a decision settles it. Restart recovery replays it, and queuing it again is a no-op.
+- `SUPERAGENT_ROUTER=off` routes by the channel map in the handler, as before the router.
 
 ## Slack
 
