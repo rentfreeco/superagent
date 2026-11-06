@@ -14,6 +14,9 @@ const slack = await SlackGateway.connect({
   appToken, // xapp-…
   ownerUserId, // U…
   eventLog: store.events,
+  // Replies in these threads reach onMessage without an @-mention.
+  isFollowedThread: (channel, threadTs) =>
+    Boolean(store.threads.owner(channel, threadTs)?.taskId),
   onMessage: (message) => {
     store.transaction(() => {
       store.outbox.enqueue({
@@ -26,6 +29,10 @@ const slack = await SlackGateway.connect({
     });
     outboxSender.wake();
   },
+  // Every reaction that reaches here needs settling, even one it ignores.
+  onReaction: (reaction) => {
+    store.events.setDisposition(reaction.eventId, "ignored");
+  },
 });
 outboxSender.start(slack);
 ```
@@ -34,9 +41,12 @@ outboxSender.start(slack);
 
 What reaches `onMessage`:
 
-- DMs to the bot, and @-mentions of it in channels. A thread reply in a channel needs the @-mention too.
+- DMs to the bot, and @-mentions of it in channels.
+- Replies in a channel thread that `isFollowedThread` says the app follows, such as a task's, with or without an @-mention. Any other channel message needs the mention. The bot receives every message in the channels it's in, so this is the gate's owner check doing its work, not Slack's.
 - Only from `ownerUserId`. Everyone else is dropped, including other bots.
 - Never the bot's own posts, edits, deletions, or a redelivered event. Redeliveries are recognised by `event_id`, and a message Slack sends as both `message` and `app_mention` is passed on once.
+
+`onReaction` gets the owner's reactions to messages, with the message's channel and ts and the emoji's name, such as `octagonal_sign` for 🛑. The emoji is kept as the event's text, so a reaction can be replayed after a crash. A reaction added while the bot is down isn't caught up.
 
 Every event is acked as soon as it arrives (Bolt does this before any middleware runs), so a slow handler doesn't trigger Slack retries. The gate records each event in `eventLog` (the store's `events` table) before anything else, so dedupe survives a restart, and it settles every event it drops with the reason: `dropped_self`, `dropped_not_owner`, `ignored`, or `duplicate_message`. An event that reaches `onMessage` stays `received` until the handler settles it.
 
@@ -222,8 +232,8 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
   - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
   - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
   - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
-- **Follow-ups:** a message in the task's thread becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
-- **Stop:** the word `stop` alone in the thread marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
+- **Follow-ups:** a reply in the task's thread, with or without an @-mention, becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
+- **Stop:** the word `stop` alone in the thread, or 🛑 on the task's first message or one of your messages there, marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
 - **Restarts:** a task left `running` is resumed from its stored session ID with every input it hadn't read, including recovery's restart note.
 - **Limits:** at most three sessions run at once; other tasks wait, oldest first.
 - **When things go wrong:** a turn that ends without a report posts the worker's last message and waits on you. A failed turn, a session that ends early, or a task that can't start is marked `failed` with the reason. Replying in the thread tries again.

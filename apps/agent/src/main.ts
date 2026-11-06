@@ -20,6 +20,7 @@ import {
 } from "./constants.ts";
 import { parseEnvironment } from "./environment.ts";
 import { createMessageHandler } from "./handle-message.ts";
+import { createReactionHandler } from "./handle-reaction.ts";
 
 const describeChannels = (channelRepos: ReadonlyMap<string, Repo>): string =>
   [...channelRepos]
@@ -85,6 +86,13 @@ const main = async (): Promise<void> => {
         wakeOutbox: outboxSender.wake,
         wakeTaskRunner: taskRunner.wake,
       }),
+      onReaction: createReactionHandler({
+        store,
+        wakeOutbox: outboxSender.wake,
+        wakeTaskRunner: taskRunner.wake,
+      }),
+      isFollowedThread: (channel, threadTs) =>
+        Boolean(store.threads.owner(channel, threadTs)?.taskId),
     });
   const slack = await connectToSlack().catch((error: unknown) => {
     store.close();

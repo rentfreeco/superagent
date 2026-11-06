@@ -2,7 +2,11 @@ import { App, LogLevel, type Receiver } from "@slack/bolt";
 import { describe, expect, it, vi } from "vitest";
 import type { Store } from "../store/open-store.ts";
 import { openTestStore } from "../store/open-test-store.ts";
-import { type InboundMessage, registerInbound } from "./inbound.ts";
+import {
+  type InboundMessage,
+  type InboundReaction,
+  registerInbound,
+} from "./inbound.ts";
 
 const OWNER = "U_OWNER";
 const BOT_USER = "U_BOT";
@@ -27,9 +31,14 @@ function setup(store: Store = openTestStore().store) {
     logLevel: LogLevel.ERROR,
   });
   const received: InboundMessage[] = [];
+  const reactions: InboundReaction[] = [];
+  const followedThreads = new Set(["C1:200.000001"]);
   registerInbound(app, {
     ownerUserId: OWNER,
     onMessage: (message) => void received.push(message),
+    onReaction: (reaction) => void reactions.push(reaction),
+    isFollowedThread: (channel, threadTs) =>
+      followedThreads.has(`${channel}:${threadTs}`),
     eventLog: store.events,
   });
 
@@ -38,7 +47,7 @@ function setup(store: Store = openTestStore().store) {
     await app.processEvent({ body, ack });
     return ack;
   };
-  return { app, received, send, store };
+  return { app, reactions, received, send, store };
 }
 
 let nextEventId = 0;
@@ -81,6 +90,152 @@ function mention(fields: Record<string, unknown> = {}) {
     ...fields,
   };
 }
+
+function channelReply(fields: Record<string, unknown> = {}) {
+  return {
+    type: "message",
+    channel: "C1",
+    channel_type: "channel",
+    user: OWNER,
+    text: "also update the docs",
+    ts: "200.000005",
+    thread_ts: "200.000001",
+    event_ts: "200.000005",
+    ...fields,
+  };
+}
+
+function reactionAdded(fields: Record<string, unknown> = {}) {
+  return {
+    type: "reaction_added",
+    user: OWNER,
+    reaction: "octagonal_sign",
+    item: { type: "message", channel: "C1", ts: "200.000001" },
+    item_user: OWNER,
+    event_ts: "200.000009",
+    ...fields,
+  };
+}
+
+describe("registerInbound in followed threads", () => {
+  it("delivers the owner's reply in a followed thread without a mention, and strips one if it has it", async () => {
+    const { received, send } = setup();
+
+    await send(envelope(channelReply(), "EvReply"));
+    await send(
+      envelope(
+        channelReply({
+          ts: "200.000006",
+          text: `<@${BOT_USER}> and the changelog`,
+        }),
+      ),
+    );
+
+    expect(received).toEqual([
+      {
+        eventId: "EvReply",
+        channel: "C1",
+        ts: "200.000005",
+        threadTs: "200.000001",
+        user: OWNER,
+        text: "also update the docs",
+        via: "thread",
+      },
+      expect.objectContaining({ text: "and the changelog", via: "thread" }),
+    ]);
+  });
+
+  it("ignores the owner's channel messages outside a followed thread", async () => {
+    const { received, send, store } = setup();
+
+    await send(
+      envelope(
+        channelReply({ thread_ts: undefined, ts: "300.000001" }),
+        "EvTop",
+      ),
+    );
+    await send(
+      envelope(channelReply({ thread_ts: "300.000001" }), "EvOtherThread"),
+    );
+
+    expect(received).toEqual([]);
+    expect(store.events.get("EvTop")?.disposition).toBe("ignored");
+    expect(store.events.get("EvOtherThread")?.disposition).toBe("ignored");
+  });
+
+  it("drops someone else's reply in a followed thread", async () => {
+    const { received, send, store } = setup();
+    await send(envelope(channelReply({ user: "U_SOMEONE" }), "EvSomeone"));
+    expect(received).toEqual([]);
+    expect(store.events.get("EvSomeone")).toMatchObject({
+      disposition: "dropped_not_owner",
+      text: null,
+    });
+  });
+
+  it("passes a reply on once when it arrives both as a message and as a mention", async () => {
+    const { received, send, store } = setup();
+    const text = `<@${BOT_USER}> also update the docs`;
+
+    await send(envelope(channelReply({ text }), "EvAsMessage"));
+    await send(
+      envelope(
+        mention({ ts: "200.000005", thread_ts: "200.000001", text }),
+        "EvAsMention",
+      ),
+    );
+
+    expect(received.map(({ eventId }) => eventId)).toEqual(["EvAsMessage"]);
+    expect(store.events.get("EvAsMention")?.disposition).toBe(
+      "duplicate_message",
+    );
+  });
+});
+
+describe("registerInbound reactions", () => {
+  it("passes on the owner's reaction to a message, keeping the emoji as the event's text", async () => {
+    const { reactions, send, store } = setup();
+
+    await send(envelope(reactionAdded(), "EvStop"));
+
+    expect(reactions).toEqual([
+      {
+        eventId: "EvStop",
+        channel: "C1",
+        ts: "200.000001",
+        user: OWNER,
+        reaction: "octagonal_sign",
+      },
+    ]);
+    expect(store.events.get("EvStop")).toMatchObject({
+      type: "reaction_added",
+      channel: "C1",
+      ts: "200.000001",
+      text: "octagonal_sign",
+      disposition: "received",
+    });
+  });
+
+  it("drops reactions by someone else or by the bot, and ignores ones on anything but a message", async () => {
+    const { reactions, send, store } = setup();
+
+    await send(envelope(reactionAdded({ user: "U_SOMEONE" }), "EvSomeone"));
+    await send(envelope(reactionAdded({ user: BOT_USER }), "EvBot"));
+    await send(
+      envelope(
+        reactionAdded({ item: { type: "file", file: "F1" } }),
+        "EvOnFile",
+      ),
+    );
+
+    expect(reactions).toEqual([]);
+    expect(store.events.get("EvSomeone")?.disposition).toBe(
+      "dropped_not_owner",
+    );
+    expect(store.events.get("EvBot")?.disposition).toBe("dropped_self");
+    expect(store.events.get("EvOnFile")?.disposition).toBe("ignored");
+  });
+});
 
 describe("registerInbound", () => {
   it("delivers a DM from the owner, acks it, and leaves it for the app to settle", async () => {
@@ -174,20 +329,18 @@ describe("registerInbound", () => {
     await send(
       envelope(
         {
-          type: "reaction_added",
+          type: "member_joined_channel",
           user: OWNER,
-          reaction: "eyes",
-          item: { type: "message", channel: "D1", ts: "100.000001" },
+          channel: "C1",
           event_ts: "100.000005",
         },
-        "EvReaction",
+        "EvJoined",
       ),
     );
 
-    expect(store.events.get("EvReaction")).toMatchObject({
-      type: "reaction_added",
-      channel: "D1",
-      ts: "100.000001",
+    expect(store.events.get("EvJoined")).toMatchObject({
+      type: "member_joined_channel",
+      channel: "C1",
       disposition: "ignored",
     });
   });

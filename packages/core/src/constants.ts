@@ -12,6 +12,7 @@ export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
 export const TASK_TITLE_MAX_LENGTH = 80;
 export const TASK_ACK_REACTION = "eyes";
+export const TASK_STOP_REACTION = "octagonal_sign";
 export const TASK_MAX_SESSIONS = 3;
 export const TASK_RUNNER_POLL_INTERVAL_MS = 5_000;
 export const TASK_FALLBACK_SUMMARY_MAX_LENGTH = 3_000;

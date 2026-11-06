@@ -13,11 +13,31 @@ export interface InboundMessage {
   user: string;
   /** Message text with the bot's @-mention removed. */
   text: string;
-  /** A direct message to the bot, or an @-mention of it in a channel. */
-  via: "dm" | "mention";
+  /**
+   * A direct message to the bot, an @-mention of it in a channel, or a reply
+   * in a channel thread the app follows, which needs no mention.
+   */
+  via: "dm" | "mention" | "thread";
 }
 
 export type MessageHandler = (message: InboundMessage) => void | Promise<void>;
+
+/** A reaction the owner added to a message. */
+export interface InboundReaction {
+  /** event_id of the delivery that carried the reaction. */
+  eventId: string;
+  /** The channel of the message the reaction is on. */
+  channel: string;
+  /** The ts of the message the reaction is on. */
+  ts: string;
+  user: string;
+  /** The emoji's name, without colons, such as octagonal_sign for 🛑. */
+  reaction: string;
+}
+
+export type ReactionHandler = (
+  reaction: InboundReaction,
+) => void | Promise<void>;
 
 /** What the gate records about a Slack event when it first arrives. */
 export interface SlackEventRecord {
@@ -45,10 +65,17 @@ export interface InboundOptions {
   /** The only Slack user whose events get past the gate. */
   ownerUserId: string;
   onMessage: MessageHandler;
+  onReaction: ReactionHandler;
+  /** Whether replies in this channel thread reach the app without an @-mention. */
+  isFollowedThread: (channel: string, threadTs: string) => boolean;
   eventLog: EventLog;
 }
 
-const HANDLED_EVENT_TYPES = new Set(["message", "app_mention"]);
+const HANDLED_EVENT_TYPES = new Set([
+  "message",
+  "app_mention",
+  "reaction_added",
+]);
 
 /**
  * Installs the inbound pipeline on a Bolt app: a global gate that records
@@ -61,7 +88,13 @@ const HANDLED_EVENT_TYPES = new Set(["message", "app_mention"]);
  */
 export function registerInbound(
   app: App,
-  { ownerUserId, onMessage, eventLog }: InboundOptions,
+  {
+    ownerUserId,
+    onMessage,
+    onReaction,
+    isFollowedThread,
+    eventLog,
+  }: InboundOptions,
 ): void {
   app.use(async (args) => {
     if ("event" in args) {
@@ -94,28 +127,42 @@ export function registerInbound(
   const deliver = (message: InboundMessage) =>
     deliverMessage(message, { eventLog, onMessage });
 
-  // Only DMs count as requests here. In channels the bot answers @-mentions,
-  // which come through app_mention below.
-  app.event("message", async ({ event, body }) => {
+  // DMs count as requests here, and so do replies in a channel thread the app
+  // follows. Anywhere else in a channel the bot answers @-mentions, which come
+  // through app_mention below.
+  app.event("message", async ({ event, body, context }) => {
     // Keep the subtypes that carry something the owner typed. Edits,
     // deletions, joins and bot posts are left out.
     if (
-      (event.subtype !== undefined &&
-        event.subtype !== "file_share" &&
-        event.subtype !== "thread_broadcast") ||
-      event.channel_type !== "im"
+      event.subtype !== undefined &&
+      event.subtype !== "file_share" &&
+      event.subtype !== "thread_broadcast"
     ) {
       eventLog.setDisposition(body.event_id, "ignored");
       return;
     }
-    await deliver({
+    const message = {
       eventId: body.event_id,
       channel: event.channel,
       ts: event.ts,
       threadTs: event.thread_ts ?? event.ts,
       user: event.user,
-      text: event.text ?? "",
-      via: "dm",
+    };
+    if (event.channel_type === "im") {
+      await deliver({ ...message, text: event.text ?? "", via: "dm" });
+      return;
+    }
+    if (
+      event.thread_ts === undefined ||
+      !isFollowedThread(event.channel, event.thread_ts)
+    ) {
+      eventLog.setDisposition(body.event_id, "ignored");
+      return;
+    }
+    await deliver({
+      ...message,
+      text: stripMention(event.text ?? "", context.botUserId),
+      via: "thread",
     });
   });
 
@@ -132,6 +179,20 @@ export function registerInbound(
       user: event.user,
       text: stripMention(event.text, context.botUserId),
       via: "mention",
+    });
+  });
+
+  app.event("reaction_added", async ({ event, body }) => {
+    if (event.item.type !== "message") {
+      eventLog.setDisposition(body.event_id, "ignored");
+      return;
+    }
+    await onReaction({
+      eventId: body.event_id,
+      channel: event.item.channel,
+      ts: event.item.ts,
+      user: event.user,
+      reaction: event.reaction,
     });
   });
 }
@@ -159,11 +220,19 @@ export interface ReplayOptions extends InboundOptions {
  * checks, from the fields the event log kept, and delivers it if it passes.
  * The log doesn't keep a message's subtype or channel_type, so a DM is
  * recognised by its D channel ID, and an edit or deletion fails the owner
- * check because it has no top-level user.
+ * check because it has no top-level user. A reaction's emoji is kept as its
+ * text.
  */
 export async function replayEvent(
   event: SlackEventRecord,
-  { ownerUserId, botUserId, onMessage, eventLog }: ReplayOptions,
+  {
+    ownerUserId,
+    botUserId,
+    onMessage,
+    onReaction,
+    isFollowedThread,
+    eventLog,
+  }: ReplayOptions,
 ): Promise<void> {
   const settle = (disposition: GateDisposition) =>
     eventLog.setDisposition(event.eventId, disposition);
@@ -171,6 +240,17 @@ export async function replayEvent(
   if (event.user !== ownerUserId) return settle("dropped_not_owner");
   const { channel, ts, user } = event;
   if (channel === null || ts === null) return settle("ignored");
+  if (event.type === "reaction_added") {
+    if (event.text === null) return settle("ignored");
+    await onReaction({
+      eventId: event.eventId,
+      channel,
+      ts,
+      user,
+      reaction: event.text,
+    });
+    return;
+  }
   const message = {
     eventId: event.eventId,
     channel,
@@ -192,6 +272,21 @@ export async function replayEvent(
   if (event.type === "message" && channel.startsWith("D")) {
     await deliverMessage(
       { ...message, text: event.text ?? "", via: "dm" },
+      { eventLog, onMessage },
+    );
+    return;
+  }
+  if (
+    event.type === "message" &&
+    event.threadTs !== null &&
+    isFollowedThread(channel, event.threadTs)
+  ) {
+    await deliverMessage(
+      {
+        ...message,
+        text: stripMention(event.text ?? "", botUserId),
+        via: "thread",
+      },
       { eventLog, onMessage },
     );
     return;
@@ -236,7 +331,10 @@ function describeEvent(eventId: string, event: object): SlackEventRecord {
     ts: readStringField(event, "ts") ?? readStringField(item, "ts") ?? null,
     threadTs: readStringField(event, "thread_ts") ?? null,
     user: readStringField(event, "user") ?? null,
-    text: readStringField(event, "text") ?? null,
+    text:
+      readStringField(event, "text") ??
+      readStringField(event, "reaction") ??
+      null,
   };
 }
 

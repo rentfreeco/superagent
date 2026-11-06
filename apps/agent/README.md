@@ -15,7 +15,7 @@ On startup it opens the store at `$SUPERAGENT_DATA_DIR/state.db` (`~/.superagent
 ## What it does with a message
 
 - **A mention in a mapped channel** starts a task: a Claude Code session works on it in its own worktree, puts 👀 on your message when it starts on it, and can read the thread for context. Its report comes back in the thread: a pull request link, a question, an answer, or what went wrong.
-- **A mention in a task's thread** goes to that task's worker, which puts 👀 on it when it gets to it. `stop` on its own stops the task and keeps its branch.
+- **A reply in a task's thread,** with or without an @-mention, goes to that task's worker, which puts 👀 on it when it gets to it. `stop` on its own, or 🛑 on the task's first message, stops the task and keeps its branch.
 - **A DM** gets a reply listing the repo channels.
 - **A mention in an unmapped channel** gets a reply with the config line to add.
 

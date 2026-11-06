@@ -100,7 +100,17 @@ export const toCatchUpEvent = (
   const mentionsBot = new RegExp(`<@${botUserId}(\\|[^>]*)?>`).test(
     fields.text,
   );
-  return mentionsBot ? { type: "app_mention", ...fields } : undefined;
+  if (mentionsBot) return { type: "app_mention", ...fields };
+  const isThreadReply =
+    message.threadTs !== undefined && message.threadTs !== message.ts;
+  return isThreadReply
+    ? {
+        type: "message",
+        channel_type: "channel",
+        ...(message.subtype === undefined ? {} : { subtype: message.subtype }),
+        ...fields,
+      }
+    : undefined;
 };
 
 export const catchUpConversation = async (
