@@ -45,7 +45,7 @@ const describeRecovery = ({
 
 const main = async (): Promise<void> => {
   const environment = parseEnvironment(process.env);
-  const channelRepos = await loadConfig(CONFIG_PATH);
+  const { repos, channelRepos } = await loadConfig(CONFIG_PATH);
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
   const recoverySnapshot = takeRecoverySnapshot({
@@ -60,9 +60,6 @@ const main = async (): Promise<void> => {
   const worktreesDirectory = path.join(
     environment.dataDirectory,
     WORKTREES_DIRECTORY_NAME,
-  );
-  const repos = new Map(
-    [...channelRepos.values()].map((repo) => [repo.name, repo]),
   );
   const taskRunner = createTaskRunner({
     store,

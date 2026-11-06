@@ -5,9 +5,14 @@ import { isGitCheckout } from "../utils/is-git-checkout.ts";
 import { pathExists } from "../utils/path-exists.ts";
 import { parseConfig, type Repo } from "./config.ts";
 
-export const loadConfig = async (
-  configPath: string,
-): Promise<ReadonlyMap<string, Repo>> => {
+export interface LoadedConfig {
+  /** Repo name -> Repo, every configured repo, mapped to a channel or not. */
+  repos: ReadonlyMap<string, Repo>;
+  /** Channel ID -> Repo. */
+  channelRepos: ReadonlyMap<string, Repo>;
+}
+
+export const loadConfig = async (configPath: string): Promise<LoadedConfig> => {
   const absoluteConfigPath = path.resolve(configPath);
   if (!(await pathExists(absoluteConfigPath))) {
     throw new Error(
@@ -59,5 +64,5 @@ export const loadConfig = async (
     const repo = repos.get(repoName);
     if (repo) channelRepos.set(channelId, repo);
   }
-  return channelRepos;
+  return { repos, channelRepos };
 };

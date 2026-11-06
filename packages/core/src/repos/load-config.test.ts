@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("loadConfig", () => {
-  it("maps each channel to its repo, with paths resolved from the config file", async () => {
+  it("returns every repo by name and each channel's repo, with paths resolved from the config file", async () => {
     const elsewhere = path.join(workspaceDirectory, "elsewhere", "repo2");
     await makeCheckout(path.join(workspaceDirectory, "superagent"));
     await makeCheckout(elsewhere);
@@ -33,11 +33,19 @@ describe("loadConfig", () => {
       repos: {
         superagent: { github: "pakgin/superagent", path: "./superagent", baseBranch: "main" },
         repo2: { github: "pakgin/repo2", path: ${JSON.stringify(elsewhere)}, baseBranch: "trunk" },
+        unmapped: { github: "pakgin/unmapped", path: "./superagent", baseBranch: "main", description: "No channel of its own" },
       },
       channels: { C0123ABCD: "superagent", C0456EFGH: "repo2", C0789IJKL: "repo2" },
     };`);
 
-    const channelRepos = await loadConfig(configPath);
+    const { repos, channelRepos } = await loadConfig(configPath);
+
+    expect([...repos.keys()]).toEqual(["superagent", "repo2", "unmapped"]);
+    expect(repos.get("unmapped")).toMatchObject({
+      name: "unmapped",
+      description: "No channel of its own",
+    });
+    expect(channelRepos.get("C0123ABCD")).toBe(repos.get("superagent"));
 
     expect([...channelRepos.keys()]).toEqual([
       "C0123ABCD",

@@ -4,7 +4,7 @@ export {
   type RepoConfig,
   type SuperagentConfig,
 } from "./config.ts";
-export { loadConfig } from "./load-config.ts";
+export { type LoadedConfig, loadConfig } from "./load-config.ts";
 export {
   type MessageRoute,
   type ReplyRoute,
