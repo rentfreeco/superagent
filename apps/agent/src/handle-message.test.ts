@@ -125,6 +125,16 @@ describe("createMessageHandler", () => {
     expect(wakeTaskRunner).toHaveBeenCalledOnce();
   });
 
+  it("ignores a mention-free reply in a thread no task owns any more", () => {
+    const { queuedPosts, receive, startTask, store } = setup();
+
+    receive(inboundMessage({ eventId: "Ev2", via: "thread" }));
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(queuedPosts()).toEqual([]);
+    expect(store.events.get("Ev2")?.disposition).toBe("ignored");
+  });
+
   it("stops the task when its thread gets the word stop, and settles the event as stopped_task", () => {
     const { createTaskOwningThread, receive, store } = setup();
     const task = createTaskOwningThread();

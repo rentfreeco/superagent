@@ -22,13 +22,20 @@
         "groups:history",
         "im:history",
         "chat:write",
+        "reactions:read",
         "reactions:write"
       ]
     }
   },
   "settings": {
     "event_subscriptions": {
-      "bot_events": ["app_mention", "message.im"]
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "reaction_added"
+      ]
     },
     "interactivity": {
       "is_enabled": false

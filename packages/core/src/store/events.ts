@@ -43,6 +43,7 @@ export interface EventStore {
   get(eventId: string): StoredEvent | undefined;
   record(event: NewEvent): boolean;
   claimMessage(eventId: string): boolean;
+  claimedMessage(channel: string, ts: string): StoredEvent | undefined;
   setDisposition(eventId: string, disposition: EventDisposition): void;
   unfinished(): StoredEvent[];
   latestTs(channel: string): string | undefined;
@@ -77,6 +78,10 @@ export const createEventStore = (
        disposition = :disposition,
        text = case when :disposition in ('dropped_self', 'dropped_not_owner') then null else text end
      where event_id = :eventId`,
+  );
+  const selectClaimedMessage = database.prepare(
+    `select ${EVENT_COLUMNS} from events
+     where channel = :channel and ts = :ts and message_claimed = 1`,
   );
   const selectUnfinished = database.prepare(
     `select ${EVENT_COLUMNS} from events
@@ -116,6 +121,10 @@ export const createEventStore = (
       ) > 0,
     claimMessage: (eventId) =>
       Number(claimMessage.run({ eventId }).changes) > 0,
+    claimedMessage: (channel, ts) => {
+      const row = selectClaimedMessage.get({ channel, ts });
+      return row === undefined ? undefined : storedEventSchema.parse(row);
+    },
     setDisposition: (eventId, disposition) => {
       updateDisposition.run({ eventId, disposition });
     },

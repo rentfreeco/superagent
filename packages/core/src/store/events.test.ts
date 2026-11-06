@@ -24,6 +24,29 @@ describe("events", () => {
     });
   });
 
+  it("finds the event that claimed a message by its channel and ts", () => {
+    const { store } = openTestStore();
+    store.events.record(
+      ownerMessage({ eventId: "EvUnclaimed", channel: "C0123ABCD" }),
+    );
+    store.events.record(
+      ownerMessage({
+        eventId: "EvClaimed",
+        type: "app_mention",
+        channel: "C0123ABCD",
+        threadTs: "90.000001",
+      }),
+    );
+    store.events.claimMessage("EvClaimed");
+
+    expect(
+      store.events.claimedMessage("C0123ABCD", "100.000001"),
+    ).toMatchObject({ eventId: "EvClaimed", threadTs: "90.000001" });
+    expect(
+      store.events.claimedMessage("C0123ABCD", "100.000009"),
+    ).toBeUndefined();
+  });
+
   it("lets only one event claim a message", () => {
     const { store } = openTestStore();
     store.events.record(ownerMessage({ eventId: "EvMessage" }));

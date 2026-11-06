@@ -45,10 +45,11 @@ packages/
                                fetchThread, post, react, findPost, classifyFailure, replay,
                                catchUp, close
         inbound.ts             the global gate (record the event once, then self, then owner,
-                               then handled types) and the DM / app_mention listeners that
-                               claim the message and build InboundMessage; replayEvent runs a
-                               recorded but unsettled event back through the same checks;
-                               EventLog is the interface the store's events table satisfies
+                               then handled types); the listeners for DMs, @-mentions, replies
+                               in followed threads (isFollowedThread), which claim the message
+                               and build InboundMessage, and reactions (InboundReaction);
+                               replayEvent runs a recorded but unsettled event back through the
+                               same checks; EventLog is what the store's events table satisfies
         catch-up.ts            catchUpConversation: read a channel or thread after a ts and feed
                                the owner's missed messages through the real gate, as synthetic
                                events with catchup:<channel>:<ts> IDs
@@ -81,6 +82,9 @@ packages/
                                as its first input
         take-follow-up.ts      takeFollowUp: a message in a task's thread becomes an input, or,
                                if it is just "stop", stops the task
+        take-reaction.ts       takeReaction: 🛑 on a task's first message, or on one of the
+                               owner's messages in its thread, stops the task
+        stop-task.ts           stopTask: what stopping does, for the word and the reaction
         runner.ts              createTaskRunner: starts queued tasks, pushes new inputs into live
                                sessions, resumes ended tasks on new input and running ones after
                                a restart, ends stopped and idle sessions, caps concurrency; gets
@@ -118,6 +122,8 @@ apps/
       handle-message.ts        createMessageHandler: in one transaction, give a message in a
                                task's thread to takeFollowUp, or route it and queue the reply
                                or call startTask; settle the event; wake the outbox and runner
+      handle-reaction.ts       createReactionHandler: takeReaction in one transaction, settle
+                               the event, wake the outbox and runner
       constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
                                STORE_FILE_NAME, and WORKTREES_DIRECTORY_NAME
     .env.example               the settings to copy into the git-ignored apps/agent/.env
@@ -185,7 +191,7 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
 - A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
 - A turn that ends idle without a report posts the worker's last message and waits on the owner; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.
-- Stopping drops every input the worker hadn't read, in the handler's transaction, and marks the task `stopped` when its state allows. A `done`, `failed`, or `blocked` task keeps its state, but a retry still waiting for a session slot is cancelled. The runner then interrupts any live session. The branch and worktree stay.
+- The owner stops a task with `stop` alone in its thread, or 🛑 on its first message or one of the owner's messages there. Stopping drops every input the worker hadn't read, in the handler's transaction, and marks the task `stopped` when its state allows. A `done`, `failed`, or `blocked` task keeps its state, but a retry still waiting for a session slot is cancelled. The runner then interrupts any live session. The branch and worktree stay.
 - Restart recovery catches up the threads of open tasks and of tasks that ended in the last seven days (`RECOVERY_ENDED_TASK_WINDOW_MS`), since a reply can resume an ended task and channel history doesn't include thread replies.
 - `git fetch origin <branch>` updates `origin/<branch>` only when the remote's fetch refspec covers it, which a single-branch or shallow clone's doesn't, and two fetches in one checkout at once fail on the ref lock. `prepareWorktree` fetches into an explicit `refs/remotes/origin/<branch>` and runs one checkout's git commands one at a time.
 - Workers run with `bypassPermissions`: they can run any command in their worktree as the service's user, and only the owner can reach them. Run the service where that is acceptable, such as its own container or machine.

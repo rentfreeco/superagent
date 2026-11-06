@@ -42,9 +42,16 @@ export {
   type TaskRequest,
   type TaskRequestStore,
 } from "./start-task.ts";
+export { type StopRequest, stopTask } from "./stop-task.ts";
 export {
   type FollowUp,
   type FollowUpDisposition,
   type FollowUpStore,
   takeFollowUp,
 } from "./take-follow-up.ts";
+export {
+  type ReactionDisposition,
+  type ReactionStore,
+  type TakenReaction,
+  takeReaction,
+} from "./take-reaction.ts";

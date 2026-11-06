@@ -18,6 +18,7 @@ import {
 import {
   type EventLog,
   type InboundMessage,
+  type InboundReaction,
   registerInbound,
   replayEvent,
   type SlackEventRecord,
@@ -29,6 +30,10 @@ export type SlackMessageHandler = (
   slack: SlackGateway,
 ) => void | Promise<void>;
 
+export type SlackReactionHandler = (
+  reaction: InboundReaction,
+) => void | Promise<void>;
+
 export interface SlackGatewayOptions {
   /** Bot token (xoxb-…). */
   botToken: string;
@@ -37,6 +42,10 @@ export interface SlackGatewayOptions {
   /** The only Slack user the bot listens to. */
   ownerUserId: string;
   onMessage: SlackMessageHandler;
+  /** Gets the owner's reactions, such as 🛑 on a task's message. */
+  onReaction: SlackReactionHandler;
+  /** Whether the owner's replies in this channel thread reach onMessage without an @-mention. */
+  isFollowedThread: (channel: string, threadTs: string) => boolean;
   /** Where the gate records every event it sees, such as the store's events table. */
   eventLog: EventLog;
   logLevel?: LogLevel;
@@ -50,6 +59,8 @@ interface GatewayParts {
   ownerUserId: string;
   eventLog: EventLog;
   onMessage: SlackMessageHandler;
+  onReaction: SlackReactionHandler;
+  isFollowedThread: (channel: string, threadTs: string) => boolean;
 }
 
 /** The bot's Socket Mode connection to Slack. */
@@ -64,6 +75,8 @@ export class SlackGateway {
   readonly #ownerUserId: string;
   readonly #eventLog: EventLog;
   readonly #onMessage: SlackMessageHandler;
+  readonly #onReaction: SlackReactionHandler;
+  readonly #isFollowedThread: (channel: string, threadTs: string) => boolean;
 
   private constructor(parts: GatewayParts) {
     this.app = parts.app;
@@ -73,6 +86,8 @@ export class SlackGateway {
     this.#ownerUserId = parts.ownerUserId;
     this.#eventLog = parts.eventLog;
     this.#onMessage = parts.onMessage;
+    this.#onReaction = parts.onReaction;
+    this.#isFollowedThread = parts.isFollowedThread;
   }
 
   /** Resolves the bot's identity, installs the inbound pipeline and opens the connection. */
@@ -81,6 +96,8 @@ export class SlackGateway {
     appToken,
     ownerUserId,
     onMessage,
+    onReaction,
+    isFollowedThread,
     eventLog,
     logLevel,
   }: SlackGatewayOptions): Promise<SlackGateway> {
@@ -118,10 +135,14 @@ export class SlackGateway {
       ownerUserId,
       eventLog,
       onMessage,
+      onReaction,
+      isFollowedThread,
     });
     registerInbound(app, {
       ownerUserId,
       onMessage: (message) => onMessage(message, gateway),
+      onReaction,
+      isFollowedThread,
       eventLog,
     });
     await app.start();
@@ -158,6 +179,8 @@ export class SlackGateway {
       botUserId: this.identity.userId,
       eventLog: this.#eventLog,
       onMessage: (message) => this.#onMessage(message, this),
+      onReaction: this.#onReaction,
+      isFollowedThread: this.#isFollowedThread,
     });
   }
 

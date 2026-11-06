@@ -40,6 +40,10 @@ export const createMessageHandler =
         );
         return;
       }
+      if (message.via === "thread") {
+        store.events.setDisposition(message.eventId, "ignored");
+        return;
+      }
       if (route.kind === "reply") {
         store.outbox.enqueue({
           dedupeKey: `reply:${message.eventId}`,

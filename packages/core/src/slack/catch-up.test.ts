@@ -58,6 +58,9 @@ const setup = (onMessage?: (message: InboundMessage) => void) => {
   registerInbound(app, {
     ownerUserId: OWNER,
     onMessage: onMessage ?? ((message) => void received.push(message)),
+    onReaction: () => undefined,
+    isFollowedThread: (channel, threadTs) =>
+      channel === "C0123ABCD" && threadTs === "300.000001",
     eventLog: store.events,
   });
   const history = vi.fn();
@@ -130,6 +133,39 @@ describe("catchUpConversation", () => {
         ts: "200.000003",
         text: "fix the build",
         via: "mention",
+      }),
+    ]);
+  });
+
+  it("in a followed thread, feeds the owner's replies even without a mention, but not the thread's root", async () => {
+    const { catchUp, received, replies } = setup();
+    replies.mockResolvedValue({
+      ok: true,
+      messages: [
+        historyMessage("300.000001", { thread_ts: "300.000001" }),
+        historyMessage("300.000002", {
+          thread_ts: "300.000001",
+          text: "also update the docs",
+        }),
+        historyMessage("300.000003", {
+          thread_ts: "300.000001",
+          user: "U0SOMEONE",
+        }),
+      ],
+    });
+
+    await catchUp({
+      channel: "C0123ABCD",
+      threadTs: "300.000001",
+      oldest: "300.000000",
+    });
+
+    expect(received).toEqual([
+      expect.objectContaining({
+        ts: "300.000002",
+        threadTs: "300.000001",
+        text: "also update the docs",
+        via: "thread",
       }),
     ]);
   });
