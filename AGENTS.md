@@ -77,16 +77,21 @@ packages/
                                tasks about the restart, catch up on what was sent while down
         index.ts               the module's public exports
       tasks/                   @repo/core/tasks: Claude Code sessions that work on tasks
-        start-task.ts          startTask: a queued task that owns the thread, the message as
-                               its first input, and an 👀 on the message
-        take-follow-up.ts      takeFollowUp: a message in a task's thread becomes an input with
-                               an 👀, or, if it is just "stop", stops the task
-        acknowledge-message.ts the 👀 reaction, queued as ack:<event_id>
+        start-task.ts          startTask: a queued task that owns the thread, with the message
+                               as its first input
+        take-follow-up.ts      takeFollowUp: a message in a task's thread becomes an input, or,
+                               if it is just "stop", stops the task
         runner.ts              createTaskRunner: starts queued tasks, pushes new inputs into live
                                sessions, resumes ended tasks on new input and running ones after
-                               a restart, ends stopped and idle sessions, caps concurrency
+                               a restart, ends stopped and idle sessions, caps concurrency; gets
+                               the Slack thread reader at start
         claude-session.ts      createClaudeSessionStarter: one Agent SDK query per session, fed
-                               inputs as streamed prompts; the report MCP tool
+                               inputs as streamed prompts; the ack, read_thread, and report
+                               MCP tools
+        acknowledge-messages.ts acknowledgeMessages: the worker's ack, an 👀 on each Slack
+                               message it was given and hasn't finished, as ack:<event_id>
+        read-task-thread.ts    readTaskThread: the worker's read_thread, the owner's and the
+                               bot's messages in the task's thread, newest that fit
         record-report.ts       recordReport: the report row, the state change, and the thread
                                post, in one transaction
         prepare-worktree.ts    prepareWorktree: agent/<task id> from the freshly fetched base
@@ -175,6 +180,8 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 
 - MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
 - An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
+- A worker has three tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages it was given and hasn't finished, `read_thread` reads the task's thread, and `report` posts where the task stands. Nothing reacts to or answers the owner until the worker does.
+- MUST: Show a worker only the owner's messages and the bot's own. `read_thread` leaves out everyone else's, since the owner gate is the only access control and workers run with permission checks off.
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
 - A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
 - A turn that ends idle without a report posts the worker's last message and waits on the owner; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.

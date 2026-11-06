@@ -12,6 +12,7 @@ import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
+import { describeError } from "../utils/describe-error.ts";
 import type { Worktree } from "./prepare-worktree.ts";
 import {
   REPORT_STATES,
@@ -38,6 +39,8 @@ export interface WorkerSessionOptions {
   repo: Repo;
   worktree: Worktree;
   inputs: readonly TaskInput[];
+  ack(): string;
+  readThread(): Promise<string>;
   report(report: WorkerReport): ReportOutcome;
   events: WorkerSessionEvents;
 }
@@ -108,6 +111,38 @@ const withoutSlackSettings = (
     Object.entries(environment).filter(([name]) => !name.startsWith("SLACK_")),
   );
 
+export const createAckTool = (ack: WorkerSessionOptions["ack"]) =>
+  tool(
+    "ack",
+    "Put 👀 on the owner's messages you've been given and haven't finished yet, so they know you've seen them. Call it when you start on a message from the owner.",
+    {},
+    async () => ({ content: [{ type: "text", text: ack() }] }),
+  );
+
+export const createReadThreadTool = (
+  readThread: WorkerSessionOptions["readThread"],
+) =>
+  tool(
+    "read_thread",
+    "Read the task's Slack thread so far, oldest first: the owner's messages and superagent's own posts, including your earlier reports.",
+    {},
+    async () => {
+      try {
+        return { content: [{ type: "text", text: await readThread() }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Couldn't read the thread: ${describeError(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
 export const createReportTool = (report: WorkerSessionOptions["report"]) =>
   tool(
     "report",
@@ -141,7 +176,7 @@ export const createClaudeSessionStarter =
     startConversation = query,
     environment = process.env,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
-  ({ task, repo, worktree, inputs, report, events }) => {
+  ({ task, repo, worktree, inputs, ack, readThread, report, events }) => {
     const prompts = createAsyncQueue<SDKUserMessage>();
     const unreadInputIds = new Map<string, number>();
 
@@ -206,7 +241,11 @@ export const createClaudeSessionStarter =
           [REPORT_SERVER_NAME]: createSdkMcpServer({
             name: REPORT_SERVER_NAME,
             version: "1.0.0",
-            tools: [createReportTool(report)],
+            tools: [
+              createAckTool(ack),
+              createReadThreadTool(readThread),
+              createReportTool(report),
+            ],
           }),
         },
         env: withoutSlackSettings(environment),

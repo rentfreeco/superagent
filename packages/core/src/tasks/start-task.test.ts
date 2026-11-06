@@ -23,7 +23,7 @@ const inboundMessage = (fields: Partial<InboundMessage>): InboundMessage => ({
 });
 
 describe("startTask", () => {
-  it("queues a task that owns the thread, with the message as its first input and an 👀 on the message", () => {
+  it("queues a task that owns the thread, with the message as its first input, and posts nothing", () => {
     const { store } = openTestStore();
 
     startTask({ message: inboundMessage({}), repo: superagentRepo, store });
@@ -47,14 +47,7 @@ describe("startTask", () => {
         text: "fix the flaky test\nit fails on CI about once a day",
       }),
     ]);
-    expect(store.outbox.pending()).toEqual([
-      expect.objectContaining({
-        dedupeKey: "ack:Ev1",
-        channel: "C0MAPPED",
-        threadTs: null,
-        message: { kind: "reaction", name: "eyes", timestamp: "100.000002" },
-      }),
-    ]);
+    expect(store.outbox.pending()).toEqual([]);
   });
 
   it("titles the task with the first line that has text, cut to fit", () => {

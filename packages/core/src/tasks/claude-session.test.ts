@@ -5,7 +5,9 @@ import type { Task } from "../store/tasks.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
 import {
   type ConversationRequest,
+  createAckTool,
   createClaudeSessionStarter,
+  createReadThreadTool,
   createReportTool,
   REPORT_SERVER_NAME,
   type StartConversation,
@@ -96,6 +98,8 @@ const setup = ({
       taskInput({}),
       taskInput({ id: 2, source: "system", ref: null, text: "restarted" }),
     ],
+    ack: () => "Put 👀 on the owner's message.",
+    readThread: async () => "[owner]\nfix the flaky test",
     report: (_report: WorkerReport): ReportOutcome => ({
       isAccepted: true,
       reply: "Posted.",
@@ -274,6 +278,40 @@ describe("createClaudeSessionStarter", () => {
     expect(() => session.send([taskInput({ id: 3 })])).toThrow(/ended/);
     session.close();
     expect(conversation.close).toHaveBeenCalled();
+  });
+});
+
+describe("createAckTool", () => {
+  it("puts 👀 on the owner's messages and says what it did", async () => {
+    const ack = vi.fn(() => "Put 👀 on the owner's message.");
+
+    const answer = await createAckTool(ack).handler({}, undefined);
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(answer).toEqual({
+      content: [{ type: "text", text: "Put 👀 on the owner's message." }],
+    });
+  });
+});
+
+describe("createReadThreadTool", () => {
+  it("answers with the thread, or with why it couldn't be read", async () => {
+    const readThread = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("[owner]\nfix the flaky test")
+      .mockRejectedValueOnce(new Error("ratelimited"));
+    const readThreadTool = createReadThreadTool(readThread);
+
+    expect(readThreadTool.name).toBe("read_thread");
+    expect(await readThreadTool.handler({}, undefined)).toEqual({
+      content: [{ type: "text", text: "[owner]\nfix the flaky test" }],
+    });
+    expect(await readThreadTool.handler({}, undefined)).toEqual({
+      content: [
+        { type: "text", text: "Couldn't read the thread: ratelimited" },
+      ],
+      isError: true,
+    });
   });
 });
 

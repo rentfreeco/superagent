@@ -3,7 +3,6 @@ import type { Repo } from "../repos/config.ts";
 import type { InboundMessage } from "../slack/inbound.ts";
 import type { Store } from "../store/open-store.ts";
 import { truncateText } from "../utils/truncate-text.ts";
-import { acknowledgeMessage } from "./acknowledge-message.ts";
 
 export interface TaskRequestStore extends Pick<
   Store,
@@ -51,5 +50,4 @@ export const startTask = ({ message, repo, store }: TaskRequest): undefined => {
     ref: message.eventId,
     text: message.text,
   });
-  acknowledgeMessage(message, store.outbox);
 };

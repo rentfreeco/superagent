@@ -68,6 +68,7 @@ const main = async (): Promise<void> => {
     startSession: createClaudeSessionStarter(),
     wakeOutbox: outboxSender.wake,
     logger: console,
+    ownerUserId: environment.slackOwnerId,
   });
 
   const connectToSlack = () =>
@@ -112,7 +113,7 @@ const main = async (): Promise<void> => {
     logger: console,
   });
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);
-  taskRunner.start();
+  taskRunner.start(slack);
 };
 
 main().catch((error: unknown) => {

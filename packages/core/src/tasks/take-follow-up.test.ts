@@ -37,7 +37,7 @@ const setup = (state: TaskState = "running") => {
 };
 
 describe("takeFollowUp", () => {
-  it("gives the task the message as an input and puts 👀 on it", () => {
+  it("gives the task the message as an input, leaving the 👀 to the worker", () => {
     const { queuedMessages, store, task } = setup();
 
     expect(
@@ -51,13 +51,7 @@ describe("takeFollowUp", () => {
         text: "also fix the lint",
       }),
     ]);
-    expect(queuedMessages()).toEqual([
-      {
-        dedupeKey: "ack:EvFollowUp",
-        threadTs: null,
-        message: { kind: "reaction", name: "eyes", timestamp: "100.000005" },
-      },
-    ]);
+    expect(queuedMessages()).toEqual([]);
   });
 
   it("stops the task on the word stop alone, drops what the worker hasn't read, and confirms in the thread", () => {

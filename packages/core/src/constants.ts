@@ -15,6 +15,7 @@ export const TASK_ACK_REACTION = "eyes";
 export const TASK_MAX_SESSIONS = 3;
 export const TASK_RUNNER_POLL_INTERVAL_MS = 5_000;
 export const TASK_FALLBACK_SUMMARY_MAX_LENGTH = 3_000;
+export const TASK_THREAD_READ_MAX_LENGTH = 40_000;
 
 export const RECOVERY_ENDED_TASK_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
