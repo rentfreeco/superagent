@@ -34,6 +34,7 @@ export interface NewTaskInput {
 export interface InputStore {
   add(input: NewTaskInput): TaskInput | undefined;
   undelivered(taskId: string): TaskInput[];
+  unread(taskId: string): TaskInput[];
   tasksWithUndelivered(): string[];
   markDelivered(inputIds: readonly number[]): void;
   markRead(inputIds: readonly number[]): void;
@@ -58,6 +59,10 @@ export const createInputStore = (
   const selectUndelivered = database.prepare(
     `select ${INPUT_COLUMNS} from inputs
      where task_id = :taskId and delivered_at is null order by id`,
+  );
+  const selectUnread = database.prepare(
+    `select ${INPUT_COLUMNS} from inputs
+     where task_id = :taskId and read_at is null order by id`,
   );
   const selectTasksWithUndelivered = database.prepare(
     `select distinct task_id as taskId from inputs
@@ -89,6 +94,8 @@ export const createInputStore = (
       selectUndelivered
         .all({ taskId })
         .map((row) => taskInputSchema.parse(row)),
+    unread: (taskId) =>
+      selectUnread.all({ taskId }).map((row) => taskInputSchema.parse(row)),
     tasksWithUndelivered: () =>
       selectTasksWithUndelivered
         .all()

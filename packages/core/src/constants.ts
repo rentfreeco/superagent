@@ -9,3 +9,12 @@ export const SLACK_DELIVERY_TIMEOUT_MS = 10_000;
 
 export const TASK_ID_LENGTH = 8;
 export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+
+export const TASK_TITLE_MAX_LENGTH = 80;
+export const TASK_ACK_REACTION = "eyes";
+export const TASK_MAX_SESSIONS = 3;
+export const TASK_RUNNER_POLL_INTERVAL_MS = 5_000;
+export const TASK_FALLBACK_SUMMARY_MAX_LENGTH = 3_000;
+
+export const WORKER_MODEL = "claude-opus-5-5";
+export const WORKER_EFFORT = "high";

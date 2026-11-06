@@ -1,17 +1,12 @@
 import { type Repo, routeMessage } from "@repo/core/repos";
 import type { InboundMessage } from "@repo/core/slack";
 import type { Store } from "@repo/core/store";
+import { takeFollowUp, type TaskRequest } from "@repo/core/tasks";
 
 export interface HandlerStore extends Pick<
   Store,
-  "transaction" | "events" | "outbox"
+  "transaction" | "events" | "outbox" | "tasks" | "threads" | "inputs"
 > {}
-
-export interface TaskRequest {
-  message: InboundMessage;
-  repo: Repo;
-  store: HandlerStore;
-}
 
 export type StartTask = (request: TaskRequest) => undefined;
 
@@ -20,13 +15,31 @@ export interface MessageHandlerOptions {
   startTask: StartTask;
   store: HandlerStore;
   wakeOutbox: () => void;
+  wakeTaskRunner: () => void;
 }
 
 export const createMessageHandler =
-  ({ channelRepos, startTask, store, wakeOutbox }: MessageHandlerOptions) =>
+  ({
+    channelRepos,
+    startTask,
+    store,
+    wakeOutbox,
+    wakeTaskRunner,
+  }: MessageHandlerOptions) =>
   (message: InboundMessage): void => {
     const route = routeMessage(channelRepos, message);
     store.transaction(() => {
+      const owningTaskId = store.threads.owner(
+        message.channel,
+        message.threadTs,
+      )?.taskId;
+      if (owningTaskId) {
+        store.events.setDisposition(
+          message.eventId,
+          takeFollowUp({ message, taskId: owningTaskId, store }),
+        );
+        return;
+      }
       if (route.kind === "reply") {
         store.outbox.enqueue({
           dedupeKey: `reply:${message.eventId}`,
@@ -46,4 +59,5 @@ export const createMessageHandler =
       store.events.setDisposition(message.eventId, "routed");
     });
     wakeOutbox();
+    wakeTaskRunner();
   };

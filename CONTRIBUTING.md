@@ -96,17 +96,27 @@ Which repo a request is about comes from the channel it is sent in. Copy `supera
 
 The config is validated when it loads, and a mistake stops startup with an error that names it: a misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a path that isn't a git checkout. In a mapped channel, @-mention the bot. A DM, or a mention in an unmapped channel, gets a reply saying what to do instead.
 
+### Claude Code and GitHub
+
+Each task runs a Claude Code session through the Claude Agent SDK, in a worktree of the repo under `$SUPERAGENT_DATA_DIR/worktrees`. The machine running the bot needs:
+
+- **Claude Code credentials:** a `claude` login on that machine, or `ANTHROPIC_API_KEY` in `apps/agent/.env`.
+- **GitHub access:** `gh auth login`, and git able to push to each configured repo, since workers push their branch and open the pull request themselves.
+
+Workers run with Claude Code's permission checks off, so they can run any command in their worktree as your user. While developing, map your channel to a scratch repo rather than one you care about.
+
 ### Environment variables
 
 The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `apps/agent/.env.example` and fill it in:
 
-| Variable              | Value                                                       |
-| --------------------- | ----------------------------------------------------------- |
-| `SLACK_BOT_TOKEN`     | the Bot User OAuth Token, `xoxb-…`                          |
-| `SLACK_APP_TOKEN`     | the app-level token with `connections:write`, `xapp-…`      |
-| `SLACK_OWNER_ID`      | your member ID, `U…`                                        |
-| `LOG_LEVEL`           | optional: `debug`, `info` (the default), `warn`, or `error` |
-| `SUPERAGENT_DATA_DIR` | optional: where the store lives; `~/.superagent` by default |
+| Variable              | Value                                                                         |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `SLACK_BOT_TOKEN`     | the Bot User OAuth Token, `xoxb-…`                                            |
+| `SLACK_APP_TOKEN`     | the app-level token with `connections:write`, `xapp-…`                        |
+| `SLACK_OWNER_ID`      | your member ID, `U…`                                                          |
+| `LOG_LEVEL`           | optional: `debug`, `info` (the default), `warn`, or `error`                   |
+| `SUPERAGENT_DATA_DIR` | optional: where the store and task worktrees live; `~/.superagent` by default |
+| `ANTHROPIC_API_KEY`   | optional: Claude Code's credentials; unset uses your `claude` login           |
 
 The bot checks all of them at startup and stops with an error naming each one that is missing or malformed, such as the two tokens swapped. `LOG_LEVEL=debug` also logs every event the owner gate drops, which helps when the bot seems to ignore a message. Never commit a token.
 

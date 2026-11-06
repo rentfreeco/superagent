@@ -76,9 +76,27 @@ packages/
         recover.ts             recoverAfterRestart: replay unfinished events, tell running
                                tasks about the restart, catch up on what was sent while down
         index.ts               the module's public exports
+      tasks/                   @repo/core/tasks: Claude Code sessions that work on tasks
+        start-task.ts          startTask: a queued task that owns the thread, the message as
+                               its first input, and an 👀 on the message
+        take-follow-up.ts      takeFollowUp: a message in a task's thread becomes an input with
+                               an 👀, or, if it is just "stop", stops the task
+        acknowledge-message.ts the 👀 reaction, queued as ack:<event_id>
+        runner.ts              createTaskRunner: starts queued tasks, pushes new inputs into live
+                               sessions, resumes ended tasks on new input and running ones after
+                               a restart, ends stopped and idle sessions, caps concurrency
+        claude-session.ts      createClaudeSessionStarter: one Agent SDK query per session, fed
+                               inputs as streamed prompts; the report MCP tool
+        record-report.ts       recordReport: the report row, the state change, and the thread
+                               post, in one transaction
+        prepare-worktree.ts    prepareWorktree: agent/<task id> from the freshly fetched base
+                               branch, in $SUPERAGENT_DATA_DIR/worktrees/<task id>
+        worker-instructions.ts what the worker is told on top of Claude Code's own system prompt
+        index.ts               the module's public exports
       utils/                   small helpers, one per file
       constants.ts             magic numbers: SQLite busy timeout, outbox backoff and polling,
-                               Slack delivery timeout, task IDs
+                               Slack delivery timeout, task IDs and titles, the session cap, the
+                               worker's model and effort
     slack-app-manifest.json    the Slack app's events, scopes, and Socket Mode switch
   eslint-config/               PRIVATE  shared ESLint flat config (Babel parser for TS)
   typescript-config/           PRIVATE  shared tsconfig bases
@@ -86,15 +104,16 @@ apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
       main.ts                  startup: environment, config, store, the recovery snapshot,
-                               connect, outbox sender, then recovery; disconnects and closes
-                               the store on SIGINT / SIGTERM
+                               connect, outbox sender, recovery, then the task runner; on
+                               SIGINT / SIGTERM closes the sessions, disconnects, and closes
+                               the store
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
                                SUPERAGENT_DATA_DIR, checked with zod
-      handle-message.ts        createMessageHandler: route, then in one transaction queue the
-                               reply or call startTask, and settle the event
-      acknowledge-task.ts      the stand-in startTask until a task runner exists
-      constants.ts             CONFIG_PATH (superagent.config.ts at the repository root) and
-                               STORE_FILE_NAME
+      handle-message.ts        createMessageHandler: in one transaction, give a message in a
+                               task's thread to takeFollowUp, or route it and queue the reply
+                               or call startTask; settle the event; wake the outbox and runner
+      constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
+                               STORE_FILE_NAME, and WORKTREES_DIRECTORY_NAME
     .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
@@ -103,7 +122,8 @@ superagent.config.example.ts   the committed example; the real superagent.config
 - A task is keyed by `channel` + `threadTs`. `threadTs` is the thread root, so follow-ups in a thread land on the same task.
 - MUST: Decide a request's repo with `routeMessage` before any work starts. A message with no repo gets the route's reply, never a guessed repo.
 - MUST: Keep `apps/agent` to wiring: reading the environment, connecting, and passing messages to `core`. Logic that could be tested without a process belongs in `@repo/core`.
-- New work for a routed request plugs in as a `StartTask` (`apps/agent/src/handle-message.ts`), replacing `acknowledgeTask`. A `StartTask` is synchronous and only writes rows, inside the handler's transaction; whatever acts on those rows runs in its own loop, as the outbox sender does. Its type returns `undefined`, so an `async` one doesn't compile, and the handler also rolls back if one returns a promise anyway.
+- A routed request starts work through a `StartTask` (`apps/agent/src/handle-message.ts`), which is `startTask` from `@repo/core/tasks`. A `StartTask` is synchronous and only writes rows, inside the handler's transaction; the task runner acts on those rows in its own loop, as the outbox sender does for posts. Its type returns `undefined`, so an `async` one doesn't compile, and the handler also rolls back if one returns a promise anyway.
+- A message in a thread a task owns goes to `takeFollowUp`, before routing. The router never sees it.
 
 ## TypeScript and Node
 
@@ -116,7 +136,7 @@ Internal packages export their TypeScript source and have no build step. Node 24
 
 ## Library versions newer than you know
 
-Bolt 5.1, `@slack/web-api` 8.3, `@slack/types` 3.3, zod 4.6, Vitest 5.1, TypeScript 7.0, ESLint 10.9, Babel 8, and pnpm 11.25 may all differ from your training data. Read the installed source and `.d.ts` files before relying on a remembered API. Bolt is at `packages/core/node_modules/@slack/bolt/dist/`.
+Bolt 5.1, `@slack/web-api` 8.3, `@slack/types` 3.3, the Claude Agent SDK 0.3, zod 4.6, Vitest 5.1, TypeScript 7.0, ESLint 10.9, Babel 8, and pnpm 11.25 may all differ from your training data. Read the installed source and `.d.ts` files before relying on a remembered API. Bolt is at `packages/core/node_modules/@slack/bolt/dist/`, and the Agent SDK's types are in `packages/core/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`.
 
 Verified against the installed versions:
 
@@ -128,6 +148,9 @@ Verified against the installed versions:
 - `@babel/eslint-parser` 8 parses in a worker thread unless `babelOptions` sets both `babelrc: false` and `configFile: false`. The shared config sets neither, so its parser options must be structured-cloneable: a path string, never a function or an imported module.
 - `node:sqlite` on Node 24.21 needs no flag, bundles SQLite 3.53, and has no transaction helper; `DatabaseSync.isTransaction` says whether one is open. Binding a named parameter the SQL doesn't use throws, so pass exactly the parameters a statement names. `INSERT … ON CONFLICT DO NOTHING RETURNING` returns no row for a conflict.
 - A default `webApi.WebClient` retries for about 30 minutes (`tenRetriesInAboutThirtyMinutes`), waits out rate limits, and has no timeout. The gateway's delivery client sets `retryConfig: { retries: 0 }`, `rejectRateLimitedCalls: true`, and a 10-second timeout, so the outbox does the retrying. Its errors carry `code` (`webApi.ErrorCode`), and platform errors carry Slack's error string in `data.error`.
+- The Agent SDK's `query` with an `AsyncIterable` prompt keeps the session open for more prompts. A prompt sent while a turn runs is folded into that turn between tool calls. Each turn ends with one `result` message, whose `user_message_uuids` lists the `uuid`s of the prompts it consumed and whose `queued_turn_count` says whether more turns are queued.
+- The Agent SDK requires `allowDangerouslySkipPermissions: true` alongside `permissionMode: "bypassPermissions"`, and loads `CLAUDE.md` only when `settingSources` includes `"project"`. Its message union is large and grows; `claude-session.ts` parses only the fields it reads, with zod, and ignores the rest.
+- pnpm 11 holds back versions newer than its minimum release age and offers to add them to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`. Pin an older version instead of accepting the exclusion.
 
 ## Store
 
@@ -144,6 +167,19 @@ All state the service needs after a restart lives in `@repo/core/store`, one SQL
 - MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any `StartTask`, must give the same result when it sees an event it may already have half-handled.
 - MUST: Take the recovery snapshot (`takeRecoverySnapshot`) before connecting to Slack, and recover only from it. Once connected, live events are recorded, including the bot's own posts echoed back by Slack. An event the live gate is still handling is also `received`, so replaying it would handle it twice, and any newer event moves a conversation's latest ts past the messages catch-up has to read.
 - MUST: Feed anything read back from Slack history through the gate (`SlackGateway.catchUp`), never straight to the handler. The gate's per-message claim is what stops a caught-up message from being handled again when its live event was already handled.
+
+## Tasks
+
+Each task is one Claude Code session at a time, run through the Agent SDK in the task's own worktree on `agent/<task id>`. The runner (`@repo/core/tasks`) is the only thing that starts, feeds, or ends sessions.
+
+- MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
+- An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
+- MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
+- A turn that ends idle without a report posts the worker's last message and waits on the owner; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.
+- Stopping marks the task `stopped` and drops the inputs it hadn't read, in the handler's transaction; the runner then interrupts the session. The branch and worktree stay.
+- Workers run with `bypassPermissions`: they can run any command in their worktree as the service's user, and only the owner can reach them. Run the service where that is acceptable, such as its own container or machine.
+- MUST: Keep Slack tokens away from workers. `claude-session.ts` drops every `SLACK_` variable from the environment it passes on.
+- NEVER: start a real Claude Code session in tests. Pass a fake `StartConversation` to `createClaudeSessionStarter`, or a fake `StartWorkerSession` to `createTaskRunner`.
 
 ## Slack
 
