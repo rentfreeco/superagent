@@ -1,4 +1,8 @@
 export {
+  acknowledgeMessages,
+  type AcknowledgeMessagesOptions,
+} from "./acknowledge-messages.ts";
+export {
   type ClaudeSessionStarterOptions,
   type ConversationRequest,
   createClaudeSessionStarter,
@@ -22,6 +26,11 @@ export {
   type ReportState,
   type WorkerReport,
 } from "./record-report.ts";
+export {
+  readTaskThread,
+  type ReadTaskThreadOptions,
+  type ThreadReader,
+} from "./read-task-thread.ts";
 export {
   createTaskRunner,
   type TaskRunner,

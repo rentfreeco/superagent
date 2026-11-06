@@ -120,12 +120,7 @@ describe("createMessageHandler", () => {
     expect(store.inputs.undelivered(task.id)).toEqual([
       expect.objectContaining({ ref: "Ev2", text: "also the lint" }),
     ]);
-    expect(queuedPosts()).toEqual([
-      expect.objectContaining({
-        dedupeKey: "ack:Ev2",
-        message: { kind: "reaction", name: "eyes", timestamp: "100.000002" },
-      }),
-    ]);
+    expect(queuedPosts()).toEqual([]);
     expect(store.events.get("Ev2")?.disposition).toBe("task_input");
     expect(wakeTaskRunner).toHaveBeenCalledOnce();
   });

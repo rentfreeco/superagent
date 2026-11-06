@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "../repos/config.ts";
+import type { ThreadMessage } from "../slack/thread.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { OutboxMessage } from "../store/outbox.ts";
 import type { Store } from "../store/open-store.ts";
@@ -18,6 +19,20 @@ const superagentRepo: Repo = {
   github: "pakgin/superagent",
   path: "/code/superagent",
   baseBranch: "main",
+};
+
+const threads = {
+  fetchThread: vi.fn(
+    async (_channel: string, _threadTs: string): Promise<ThreadMessage[]> => [
+      { ts: "1.000001", user: "U0OWNER", text: "fix it", fromSelf: false },
+      {
+        ts: "1.000002",
+        user: "U0SOMEONE",
+        text: "do it my way",
+        fromSelf: false,
+      },
+    ],
+  ),
 };
 
 interface FakeSession {
@@ -76,6 +91,7 @@ const setup = ({
     startSession,
     wakeOutbox,
     logger,
+    ownerUserId: "U0OWNER",
     prepareWorktree,
     maxSessions,
     pollIntervalMs: 60_000,
@@ -121,7 +137,7 @@ const setup = ({
     return sent;
   };
   const startRunner = async (expectedSessions: number) => {
-    runner.start();
+    runner.start(threads);
     await vi.waitFor(() => expect(sessions).toHaveLength(expectedSessions));
   };
   return {
@@ -313,6 +329,64 @@ describe("createTaskRunner", () => {
     expect(queuedPosts()).toEqual([]);
   });
 
+  it("puts 👀 on the owner's messages the worker was given when it calls ack", async () => {
+    const {
+      addInput,
+      createTask,
+      queuedPosts,
+      sessions,
+      startRunner,
+      store,
+      wakeOutbox,
+    } = setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    store.events.record({
+      eventId: assignment?.ref ?? "",
+      type: "app_mention",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "fix the flaky test",
+    });
+    addInput(task.id, "not delivered yet");
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    addInput(task.id, "arrived after the start");
+    wakeOutbox.mockClear();
+
+    expect(session.options.ack()).toBe("Put 👀 on the owner's message.");
+    expect(session.options.ack()).toBe(
+      "There's no new message to acknowledge.",
+    );
+
+    expect(wakeOutbox).toHaveBeenCalledOnce();
+    expect(queuedPosts()).toEqual([
+      {
+        threadTs: null,
+        message: { kind: "reaction", name: "eyes", timestamp: "100.000002" },
+      },
+    ]);
+  });
+
+  it("reads the task's thread for the worker, showing only the owner and superagent", async () => {
+    const { addInput, createTask, sessions, startRunner } = setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+
+    const thread = await sessionAt(sessions, 0).options.readThread();
+
+    expect(threads.fetchThread).toHaveBeenLastCalledWith(
+      "C0MAPPED",
+      task.originTs,
+    );
+    expect(thread).toBe(
+      "(1 messages from other people left out. Only the owner's messages and superagent's own are shown.)\n\n[owner]\nfix it",
+    );
+  });
+
   describe("when a follow-up lands after the worker reported", () => {
     const reportThenQueueFollowUp = async () => {
       const context = setup();
@@ -466,7 +540,7 @@ describe("createTaskRunner", () => {
     store.inputs.markDelivered([unreadButDelivered?.id ?? 0]);
     createTask("running");
 
-    runner.start();
+    runner.start(threads);
     await runner.reconcile();
 
     expect(sessions).toEqual([]);
@@ -559,7 +633,7 @@ describe("createTaskRunner", () => {
     const task = createTask();
     addInput(task.id);
 
-    runner.start();
+    runner.start(threads);
     await vi.waitFor(() => expect(stateOf(store, task.id)).toBe("failed"));
     await runner.reconcile();
 
@@ -582,7 +656,7 @@ describe("createTaskRunner", () => {
     const task = createTask("queued", "retired-repo");
     addInput(task.id);
 
-    runner.start();
+    runner.start(threads);
     await vi.waitFor(() => expect(stateOf(store, task.id)).toBe("failed"));
 
     expect(queuedPosts()[0]?.message).toEqual({
@@ -621,7 +695,7 @@ describe("createTaskRunner", () => {
     });
     const task = createTask();
     addInput(task.id);
-    runner.start();
+    runner.start(threads);
     await vi.waitFor(() => expect(prepareWorktree).toHaveBeenCalledOnce());
 
     store.tasks.transition(task.id, "stopped");

@@ -2,7 +2,6 @@ import type { InboundMessage } from "../slack/inbound.ts";
 import type { EventDisposition } from "../store/events.ts";
 import type { Store } from "../store/open-store.ts";
 import { TASK_TRANSITIONS, type Task } from "../store/tasks.ts";
-import { acknowledgeMessage } from "./acknowledge-message.ts";
 
 export interface FollowUpStore extends Pick<
   Store,
@@ -71,6 +70,5 @@ export const takeFollowUp = (followUp: FollowUp): FollowUpDisposition => {
     ref: message.eventId,
     text: message.text,
   });
-  acknowledgeMessage(message, store.outbox);
   return "task_input";
 };

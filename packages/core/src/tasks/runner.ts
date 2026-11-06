@@ -8,6 +8,7 @@ import type { Store } from "../store/open-store.ts";
 import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
+import { acknowledgeMessages } from "./acknowledge-messages.ts";
 import type {
   StartWorkerSession,
   WorkerSession,
@@ -24,6 +25,7 @@ import {
   type ReportOutcome,
   type WorkerReport,
 } from "./record-report.ts";
+import { readTaskThread, type ThreadReader } from "./read-task-thread.ts";
 
 export interface TaskRunnerLogger {
   info(message: string): void;
@@ -31,19 +33,23 @@ export interface TaskRunnerLogger {
 }
 
 export interface TaskRunnerOptions {
-  store: Pick<Store, "transaction" | "tasks" | "inputs" | "reports" | "outbox">;
+  store: Pick<
+    Store,
+    "transaction" | "tasks" | "inputs" | "reports" | "outbox" | "events"
+  >;
   repos: ReadonlyMap<string, Repo>;
   worktreesDirectory: string;
   startSession: StartWorkerSession;
   wakeOutbox: () => void;
   logger: TaskRunnerLogger;
+  ownerUserId: string;
   prepareWorktree?: PrepareWorktree;
   maxSessions?: number;
   pollIntervalMs?: number;
 }
 
 export interface TaskRunner {
-  start(): void;
+  start(threads: ThreadReader): void;
   wake(): void;
   reconcile(): Promise<void>;
   stop(): Promise<void>;
@@ -57,6 +63,13 @@ interface LiveSession {
 const isReportedState = (state: TaskState): boolean =>
   REPORT_STATES.some((reportState) => reportState === state);
 
+const describeAcknowledgement = (acknowledgedCount: number): string => {
+  if (acknowledgedCount === 0) return "There's no new message to acknowledge.";
+  return acknowledgedCount === 1
+    ? "Put 👀 on the owner's message."
+    : `Put 👀 on ${acknowledgedCount} of the owner's messages.`;
+};
+
 const fallbackSummary = (text: string, whenEmpty: string): string =>
   truncateText(text.trim() || whenEmpty, TASK_FALLBACK_SUMMARY_MAX_LENGTH);
 
@@ -67,6 +80,7 @@ export const createTaskRunner = ({
   startSession,
   wakeOutbox,
   logger,
+  ownerUserId,
   prepareWorktree = prepareGitWorktree,
   maxSessions = TASK_MAX_SESSIONS,
   pollIntervalMs = TASK_RUNNER_POLL_INTERVAL_MS,
@@ -76,6 +90,7 @@ export const createTaskRunner = ({
   const launches = new Set<Promise<void>>();
   let isRunning = false;
   let pollTimer: NodeJS.Timeout | undefined;
+  let threadReader: ThreadReader | undefined;
 
   const moveToRunning = (taskId: string): void => {
     const task = store.tasks.get(taskId);
@@ -90,6 +105,12 @@ export const createTaskRunner = ({
     if (task !== undefined && isReportedState(task.state)) {
       store.tasks.transition(taskId, "running");
     }
+  };
+
+  const acknowledge = (taskId: string): string => {
+    const acknowledgedCount = acknowledgeMessages({ store, taskId });
+    if (acknowledgedCount > 0) wakeOutbox();
+    return describeAcknowledgement(acknowledgedCount);
   };
 
   const settleReport = (outcome: ReportOutcome): ReportOutcome => {
@@ -226,7 +247,14 @@ export const createTaskRunner = ({
         taskId: task.id,
         worktreesDirectory,
       });
-      if (!isRunning || store.tasks.get(task.id)?.state !== "running") return;
+      const threads = threadReader;
+      if (
+        !isRunning ||
+        threads === undefined ||
+        store.tasks.get(task.id)?.state !== "running"
+      ) {
+        return;
+      }
       const runningTask = store.tasks.update(task.id, {
         branch: worktree.branch,
         worktree: worktree.path,
@@ -239,6 +267,9 @@ export const createTaskRunner = ({
         repo,
         worktree,
         inputs,
+        ack: () => acknowledge(task.id),
+        readThread: () =>
+          readTaskThread({ threads, task: runningTask, ownerUserId }),
         report: (workerReport) => postWorkerReport(task.id, workerReport),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
@@ -320,9 +351,10 @@ export const createTaskRunner = ({
   };
 
   return {
-    start: () => {
+    start: (threads) => {
       if (isRunning) throw new Error("The task runner is already running.");
       isRunning = true;
+      threadReader = threads;
       pollTimer = setInterval(wake, pollIntervalMs);
       wake();
     },
