@@ -36,7 +36,8 @@ packages/
         config.ts              SuperagentConfig and Repo types, defineConfig, and parseConfig
                                (the zod schema, including channel -> repo cross-checks)
         load-config.ts         loadConfig: import the config file, validate it, confirm each
-                               repo path is a git checkout, return channel ID -> Repo
+                               repo path is a git checkout, return every repo by name and
+                               channel ID -> Repo
         route-message.ts       routeMessage: a mapped channel's repo, or the reply for a DM
                                or an unmapped channel
         index.ts               the module's public exports
@@ -118,8 +119,8 @@ packages/
                                bot's messages in the task's thread, newest that fit
         record-report.ts       recordReport: the report row, the state change, and the thread
                                post, in one transaction
-        hand-back-message.ts   handBackMessage: the worker's hand_back, the newest message it
-                               was given this turn as a router candidate naming the task and why
+        hand-back-message.ts   handBackMessage: the worker's hand_back, the message it names as
+                               a router candidate naming the task and why
         tool-outcome.ts        ToolOutcome, what a worker or router tool answers, and
                                toToolResult
         worker-guard.ts        createWorkerGuard: the PreToolUse hook that refuses merges,
@@ -235,7 +236,8 @@ Every owner message no task owns, a DM or a mention outside a task's thread, is 
 - MUST: Keep the router to routing. Its session has no built-in tools, loads no settings files, and is allowed only the routing tools. Never give it a tool that reads code or runs commands; the worker owns the work.
 - When the router doesn't decide a candidate (its turn goes idle, its session fails or can't start, or the candidate waits past `ROUTER_DECISION_TIMEOUT_MS`), the channel map decides it, recorded as `decidedBy: "fallback"`.
 - The handler leaves a candidate's event `received` until a decision settles it. Restart recovery replays it, and queuing it again is a no-op.
-- A worker's `hand_back` queues the newest message it was given this turn as a new candidate naming the task and why, once per task. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
+- MUST: When a task takes over a thread, pass it the candidates still waiting there, in the same transaction (`decideStartTask` does). Otherwise a replay after a restart gives the waiting message to the task as a follow-up while its candidate is still routed.
+- A worker sees each Slack message as `[message N]`, the input's ID. Its `hand_back` names one and queues it as a new candidate naming the task and why, once per task. The task's first input, its request, can't be handed back. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
 - `SUPERAGENT_ROUTER=off` runs the router without a session: the channel map decides every candidate as soon as it's queued.
 
 ## Slack
