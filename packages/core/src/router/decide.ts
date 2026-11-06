@@ -6,6 +6,7 @@ import type { EventDisposition } from "../store/events.ts";
 import type { Store } from "../store/open-store.ts";
 import { startTask } from "../tasks/start-task.ts";
 import { stopTask } from "../tasks/stop-task.ts";
+import type { ToolOutcome } from "../tasks/tool-outcome.ts";
 
 export interface DecisionContext {
   store: Pick<
@@ -22,11 +23,6 @@ export interface DecisionContext {
   /** Repo name -> Repo. */
   repos: ReadonlyMap<string, Repo>;
   decidedBy: Decision["decidedBy"];
-}
-
-export interface DecisionResult {
-  isAccepted: boolean;
-  reply: string;
 }
 
 interface Settlement {
@@ -60,7 +56,7 @@ export interface IgnoreDecision {
   reason: string;
 }
 
-const refused = (reply: string): DecisionResult => ({
+const refused = (reply: string): ToolOutcome => ({
   isAccepted: false,
   reply,
 });
@@ -70,7 +66,7 @@ const settle = (
   candidateId: number,
   reason: string,
   decide: (candidate: Candidate) => Settlement | string,
-): DecisionResult =>
+): ToolOutcome =>
   store.transaction(() => {
     const candidate = store.candidates.get(candidateId);
     if (candidate === undefined)
@@ -105,7 +101,7 @@ const toMessage = (candidate: Candidate): InboundMessage => ({
 export const decideStartTask = (
   context: DecisionContext,
   { candidateId, repo: repoName, title, reason }: StartTaskDecision,
-): DecisionResult =>
+): ToolOutcome =>
   settle(context, candidateId, reason, (candidate) => {
     const repo = context.repos.get(repoName);
     if (repo === undefined) {
@@ -116,7 +112,9 @@ export const decideStartTask = (
       candidate.threadTs,
     );
     if (owner?.taskId) {
-      return `This thread already belongs to task ${owner.taskId}. Attach the message to it, or reply.`;
+      return candidate.handedBackBy === owner.taskId
+        ? `This message is in task ${owner.taskId}'s thread, so no task can start from it. Reply asking the owner to send it as a new message, or attach it to the task it is about.`
+        : `This thread already belongs to task ${owner.taskId}. Attach the message to it, or reply.`;
     }
     startTask({
       message: toMessage(candidate),
@@ -138,7 +136,7 @@ export const decideStartTask = (
 export const decideReply = (
   context: DecisionContext,
   { candidateId, text, reason }: ReplyDecision,
-): DecisionResult =>
+): ToolOutcome =>
   settle(context, candidateId, reason, (candidate) => {
     if (!text.trim()) return "A reply needs text.";
     context.store.outbox.enqueue({
@@ -158,7 +156,7 @@ export const decideReply = (
 export const decideAttach = (
   context: DecisionContext,
   { candidateId, taskId, reason }: TaskDecision,
-): DecisionResult =>
+): ToolOutcome =>
   settle(context, candidateId, reason, (candidate) => {
     if (context.store.tasks.get(taskId) === undefined) {
       return `There is no task ${taskId}.`;
@@ -166,12 +164,15 @@ export const decideAttach = (
     if (candidate.handedBackBy === taskId) {
       return `Task ${taskId} handed this message back. Attach it elsewhere, or decide another way.`;
     }
-    context.store.inputs.add({
+    const input = context.store.inputs.add({
       taskId,
       source: "router",
       ref: candidate.eventId,
       text: `The owner wrote this elsewhere, and it is about this task: ${candidate.text}`,
     });
+    if (input === undefined) {
+      return "This message was already passed to a task, which handed it back. Reply, start a task, or ignore it.";
+    }
     return {
       outcome: "attach",
       taskId,
@@ -183,7 +184,7 @@ export const decideAttach = (
 export const decideStop = (
   context: DecisionContext,
   { candidateId, taskId, reason }: TaskDecision,
-): DecisionResult =>
+): ToolOutcome =>
   settle(context, candidateId, reason, (candidate) => {
     if (context.store.tasks.get(taskId) === undefined) {
       return `There is no task ${taskId}.`;
@@ -206,7 +207,7 @@ export const decideStop = (
 export const decideIgnore = (
   context: DecisionContext,
   { candidateId, reason }: IgnoreDecision,
-): DecisionResult =>
+): ToolOutcome =>
   settle(context, candidateId, reason, () => ({
     outcome: "ignore",
     taskId: null,

@@ -40,7 +40,8 @@ const idleTurn = {
 
 const setup = ({
   startSession,
-}: { startSession?: StartRouterSession } = {}) => {
+  hasSession = true,
+}: { startSession?: StartRouterSession; hasSession?: boolean } = {}) => {
   const { clock, store } = openTestStore();
   const sessions: FakeRouterSession[] = [];
   const fakeStart: StartRouterSession = (options) => {
@@ -65,7 +66,7 @@ const setup = ({
     store,
     repos: new Map([["superagent", superagentRepo]]),
     channelRepos: new Map([["C0MAPPED", superagentRepo]]),
-    startSession: startSession ?? fakeStart,
+    startSession: hasSession ? (startSession ?? fakeStart) : undefined,
     wakeOutbox,
     wakeTaskRunner,
     logger,
@@ -230,6 +231,24 @@ describe("createRouter", () => {
     expect(store.decisions.forCandidate(candidate.id)?.decidedBy).toBe(
       "fallback",
     );
+  });
+
+  it("without a session, lets the channel map decide every candidate as soon as it's queued", () => {
+    const { queue, router, sessions, store, wakeTaskRunner } = setup({
+      hasSession: false,
+    });
+    router.start();
+
+    const candidate = queue();
+    router.wake();
+
+    expect(sessions).toEqual([]);
+    expect(store.decisions.forCandidate(candidate.id)).toMatchObject({
+      outcome: "start_task",
+      decidedBy: "fallback",
+    });
+    expect(store.events.get(candidate.eventId)?.disposition).toBe("routed");
+    expect(wakeTaskRunner).toHaveBeenCalled();
   });
 
   it("on stop, closes the session and decides nothing more", () => {

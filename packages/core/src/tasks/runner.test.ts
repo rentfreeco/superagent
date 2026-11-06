@@ -84,12 +84,14 @@ const setup = ({
   };
   const logger = { info: vi.fn(), error: vi.fn() };
   const wakeOutbox = vi.fn();
+  const wakeRouter = vi.fn();
   const runner = createTaskRunner({
     store,
     repos: new Map([["superagent", superagentRepo]]),
     worktreesDirectory: "/data/worktrees",
     startSession,
     wakeOutbox,
+    wakeRouter,
     logger,
     ownerUserId: "U0OWNER",
     prepareWorktree,
@@ -153,6 +155,7 @@ const setup = ({
     startRunner,
     store,
     wakeOutbox,
+    wakeRouter,
   };
 };
 
@@ -327,6 +330,37 @@ describe("createTaskRunner", () => {
     expect(session.sent.at(-1)?.map(({ id }) => id)).toEqual([followUp?.id]);
     expect(session.end).not.toHaveBeenCalled();
     expect(queuedPosts()).toEqual([]);
+  });
+
+  it("hands a message back to the router when the worker calls hand_back, and wakes it", async () => {
+    const { addInput, createTask, sessions, startRunner, store, wakeRouter } =
+      setup();
+    const task = createTask();
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    store.events.record({
+      eventId: offTopic?.ref ?? "",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "what's on my calendar?",
+    });
+    await startRunner(1);
+
+    const outcome = sessionAt(sessions, 0).options.handBack(
+      "It isn't about the flaky test.",
+    );
+
+    expect(outcome.isAccepted).toBe(true);
+    expect(store.candidates.undecided()).toEqual([
+      expect.objectContaining({
+        eventId: offTopic?.ref,
+        handedBackBy: task.id,
+        handBackReason: "It isn't about the flaky test.",
+      }),
+    ]);
+    expect(wakeRouter).toHaveBeenCalledOnce();
   });
 
   it("puts 👀 on the owner's messages the worker was given when it calls ack", async () => {

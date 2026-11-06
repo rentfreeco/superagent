@@ -18,11 +18,8 @@ import {
   startAgentSession,
 } from "./agent-session.ts";
 import type { Worktree } from "./prepare-worktree.ts";
-import {
-  REPORT_STATES,
-  type ReportOutcome,
-  type WorkerReport,
-} from "./record-report.ts";
+import { REPORT_STATES, type WorkerReport } from "./record-report.ts";
+import { type ToolOutcome, toToolResult } from "./tool-outcome.ts";
 import { createWorkerGuard } from "./worker-guard.ts";
 import { workerInstructions } from "./worker-instructions.ts";
 
@@ -46,7 +43,8 @@ export interface WorkerSessionOptions {
   inputs: readonly TaskInput[];
   ack(): string;
   readThread(): Promise<string>;
-  report(report: WorkerReport): ReportOutcome;
+  report(report: WorkerReport): ToolOutcome;
+  handBack(reason: string): ToolOutcome;
   events: WorkerSessionEvents;
 }
 
@@ -88,7 +86,7 @@ const WORKER_TOOLS = [
   "WebFetch",
   "WebSearch",
   "Skill",
-  ...["ack", "read_thread", "report"].map(
+  ...["ack", "read_thread", "report", "hand_back"].map(
     (toolName) => `mcp__${WORKER_SERVER_NAME}__${toolName}`,
   ),
 ];
@@ -218,10 +216,22 @@ export const createReportTool = (report: WorkerSessionOptions["report"]) =>
           "For ready: the pull request's URL, as gh pr create prints it.",
         ),
     },
-    async (workerReport) => {
-      const { isAccepted, reply } = report(workerReport);
-      return { content: [{ type: "text", text: reply }], isError: !isAccepted };
+    async (workerReport) => toToolResult(report(workerReport)),
+  );
+
+export const createHandBackTool = (
+  handBack: WorkerSessionOptions["handBack"],
+) =>
+  tool(
+    "hand_back",
+    "Hand the newest message the owner sent you this turn back to superagent's router, when it isn't about this task, such as a new request sent in your thread. The router decides what happens to it.",
+    {
+      reason: z
+        .string()
+        .min(1)
+        .describe("One sentence on why the message isn't about this task."),
     },
+    async ({ reason }) => toToolResult(handBack(reason)),
   );
 
 export const createClaudeSessionStarter =
@@ -231,7 +241,17 @@ export const createClaudeSessionStarter =
     homeDirectory = homedir(),
     sandbox = false,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
-  ({ task, repo, worktree, inputs, ack, readThread, report, events }) => {
+  ({
+    task,
+    repo,
+    worktree,
+    inputs,
+    ack,
+    readThread,
+    report,
+    handBack,
+    events,
+  }) => {
     const gitDirectory = path.join(repo.path, ".git");
     const session = startAgentSession({
       startConversation,
@@ -272,6 +292,7 @@ export const createClaudeSessionStarter =
               createAckTool(ack),
               createReadThreadTool(readThread),
               createReportTool(report),
+              createHandBackTool(handBack),
             ],
           }),
         },

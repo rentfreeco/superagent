@@ -1,8 +1,8 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { type ToolOutcome, toToolResult } from "../tasks/tool-outcome.ts";
 import type {
-  DecisionResult,
   IgnoreDecision,
   ReplyDecision,
   StartTaskDecision,
@@ -10,11 +10,11 @@ import type {
 } from "./decide.ts";
 
 export interface RouterActions {
-  startTask(decision: StartTaskDecision): DecisionResult;
-  reply(decision: ReplyDecision): DecisionResult;
-  attach(decision: TaskDecision): DecisionResult;
-  stop(decision: TaskDecision): DecisionResult;
-  ignore(decision: IgnoreDecision): DecisionResult;
+  startTask(decision: StartTaskDecision): ToolOutcome;
+  reply(decision: ReplyDecision): ToolOutcome;
+  attach(decision: TaskDecision): ToolOutcome;
+  stop(decision: TaskDecision): ToolOutcome;
+  ignore(decision: IgnoreDecision): ToolOutcome;
   listTasks(which: "open" | "all"): string;
 }
 
@@ -40,13 +40,8 @@ const reason = z
   .describe("One sentence on why, kept with the decision.");
 const taskId = z.string().min(1).describe("The task's ID, from list_tasks.");
 
-const answer = async ({
-  isAccepted,
-  reply,
-}: DecisionResult): Promise<CallToolResult> => ({
-  content: [{ type: "text", text: reply }],
-  isError: !isAccepted,
-});
+const answer = async (outcome: ToolOutcome): Promise<CallToolResult> =>
+  toToolResult(outcome);
 
 const listed = async (text: string): Promise<CallToolResult> => ({
   content: [{ type: "text", text }],

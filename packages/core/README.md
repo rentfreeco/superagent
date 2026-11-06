@@ -231,7 +231,8 @@ router.stop(); // on shutdown
 - **Decisions:** `start_task` (in any configured repo; the channel's repo is a default), `reply` (a short answer or one question), `attach` (to a task the message points at explicitly), `stop`, and `ignore`. Each runs in one transaction that records the decision with its reason, writes the task, input, or reply, settles the Slack event, and marks the candidate decided. A second decision for the same candidate is refused.
 - **Status:** `list_tasks` lists tasks for questions like "what's waiting on me?".
 - **The session:** `claude-opus-5-5` at low effort, resumed from the session ID kept in `kv`, with no built-in tools, no settings files, and only the routing tools allowed. Each candidate arrives as a card: where it was sent, its thread, and, for a hand-back, which task handed it back and why.
-- **Fallback:** the channel map decides a candidate the router left undecided when its turn went idle, when its session failed or couldn't start, or after `ROUTER_DECISION_TIMEOUT_MS`. So every candidate is settled, even with the router down.
+- **Hand-backs:** a message a worker hands back is a candidate of its own, naming the task and why. The router won't attach it back to that task, and refuses to start a task in that task's thread.
+- **Fallback:** the channel map decides a candidate the router left undecided when its turn went idle, when its session failed or couldn't start, or after `ROUTER_DECISION_TIMEOUT_MS`. So every candidate is settled, even with the router down. A router created without `startSession` lets the channel map decide every candidate as soon as it's queued.
 - **Repo descriptions:** a repo's `description` in the config goes into the router's instructions, so it can tell repos apart.
 
 ## `@repo/core/tasks`
@@ -266,10 +267,11 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 
 - **A new request:** `startTask` queues a task that owns the thread and keeps the message as its first input. Nothing is posted until the worker acts.
 - **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
-- **Worker tools:** the worker reaches Slack only through three tools.
+- **Worker tools:** the worker reaches Slack only through four tools.
   - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
   - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
   - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
+  - `hand_back` gives the router the newest message the worker was given this turn, when it isn't about the task, with why. The task's own request can't be handed back.
 - **Follow-ups:** a reply in the task's thread, with or without an @-mention, becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
 - **Stop:** the word `stop` alone in the thread, or 🛑 on the task's first message or one of your messages there, marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
 - **Restarts:** a task left `running` is resumed from its stored session ID with every input it hadn't read, including recovery's restart note.

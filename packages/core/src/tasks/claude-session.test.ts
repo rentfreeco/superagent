@@ -11,11 +11,13 @@ import type {
 import {
   createAckTool,
   createClaudeSessionStarter,
+  createHandBackTool,
   createReadThreadTool,
   createReportTool,
   WORKER_SERVER_NAME,
 } from "./claude-session.ts";
-import type { ReportOutcome, WorkerReport } from "./record-report.ts";
+import type { WorkerReport } from "./record-report.ts";
+import type { ToolOutcome } from "./tool-outcome.ts";
 
 const superagentRepo: Repo = {
   name: "superagent",
@@ -110,10 +112,11 @@ const setup = ({
     ],
     ack: () => "Put 👀 on the owner's message.",
     readThread: async () => "[owner]\nfix the flaky test",
-    report: (_report: WorkerReport): ReportOutcome => ({
+    report: (_report: WorkerReport): ToolOutcome => ({
       isAccepted: true,
       reply: "Posted.",
     }),
+    handBack: () => ({ isAccepted: true, reply: "Handed back." }),
     events,
   });
   const [request] = requests;
@@ -167,7 +170,7 @@ describe("createClaudeSessionStarter", () => {
     ]);
   });
 
-  it("allows only its working tools, including the three superagent ones, and guards each call", async () => {
+  it("allows only its working tools, including the superagent ones, and guards each call", async () => {
     const { request } = setup();
 
     expect(request.options.allowedTools).toEqual(
@@ -178,6 +181,7 @@ describe("createClaudeSessionStarter", () => {
         "mcp__superagent__ack",
         "mcp__superagent__read_thread",
         "mcp__superagent__report",
+        "mcp__superagent__hand_back",
       ]),
     );
     expect(request.options.allowedTools).not.toContain("AskUserQuestion");
@@ -381,7 +385,7 @@ describe("createReadThreadTool", () => {
 
 describe("createReportTool", () => {
   it("passes the worker's report on, and answers with the outcome", async () => {
-    const report = vi.fn((_report: WorkerReport): ReportOutcome => ({
+    const report = vi.fn((_report: WorkerReport): ToolOutcome => ({
       isAccepted: false,
       reply: "Not posted: a ready report needs the pull request's URL.",
     }));
@@ -410,6 +414,30 @@ describe("createReportTool", () => {
         },
       ],
       isError: true,
+    });
+  });
+});
+
+describe("createHandBackTool", () => {
+  it("passes the worker's reason on, and answers with the outcome", async () => {
+    const handBack = vi.fn((_reason: string): ToolOutcome => ({
+      isAccepted: true,
+      reply: "Handed the message back.",
+    }));
+    const handBackTool = createHandBackTool(handBack);
+
+    const answer = await handBackTool.handler(
+      { reason: "It asks about another repo." },
+      undefined,
+    );
+
+    expect(handBackTool.name).toBe("hand_back");
+    expect(handBack).toHaveBeenCalledExactlyOnceWith(
+      "It asks about another repo.",
+    );
+    expect(answer).toEqual({
+      content: [{ type: "text", text: "Handed the message back." }],
+      isError: false,
     });
   });
 });

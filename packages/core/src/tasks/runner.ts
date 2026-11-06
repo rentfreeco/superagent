@@ -9,6 +9,7 @@ import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
 import { acknowledgeMessages } from "./acknowledge-messages.ts";
+import { handBackMessage } from "./hand-back-message.ts";
 import type {
   StartWorkerSession,
   WorkerSession,
@@ -22,10 +23,10 @@ import {
 import {
   recordReport,
   REPORT_STATES,
-  type ReportOutcome,
   type WorkerReport,
 } from "./record-report.ts";
 import { readTaskThread, type ThreadReader } from "./read-task-thread.ts";
+import type { ToolOutcome } from "./tool-outcome.ts";
 
 export interface TaskRunnerLogger {
   info(message: string): void;
@@ -35,12 +36,20 @@ export interface TaskRunnerLogger {
 export interface TaskRunnerOptions {
   store: Pick<
     Store,
-    "transaction" | "tasks" | "inputs" | "reports" | "outbox" | "events"
+    | "transaction"
+    | "tasks"
+    | "inputs"
+    | "reports"
+    | "outbox"
+    | "events"
+    | "candidates"
   >;
   repos: ReadonlyMap<string, Repo>;
   worktreesDirectory: string;
   startSession: StartWorkerSession;
   wakeOutbox: () => void;
+  /** Called after a worker hands a message back, for the router to decide. */
+  wakeRouter: () => void;
   logger: TaskRunnerLogger;
   ownerUserId: string;
   prepareWorktree?: PrepareWorktree;
@@ -79,6 +88,7 @@ export const createTaskRunner = ({
   worktreesDirectory,
   startSession,
   wakeOutbox,
+  wakeRouter,
   logger,
   ownerUserId,
   prepareWorktree = prepareGitWorktree,
@@ -113,7 +123,13 @@ export const createTaskRunner = ({
     return describeAcknowledgement(acknowledgedCount);
   };
 
-  const settleReport = (outcome: ReportOutcome): ReportOutcome => {
+  const handBack = (taskId: string, reason: string): ToolOutcome => {
+    const outcome = handBackMessage({ store, taskId, reason });
+    if (outcome.isAccepted) wakeRouter();
+    return outcome;
+  };
+
+  const settleReport = (outcome: ToolOutcome): ToolOutcome => {
     if (outcome.isAccepted) wakeOutbox();
     return outcome;
   };
@@ -121,13 +137,13 @@ export const createTaskRunner = ({
   const postReport = (
     taskId: string,
     workerReport: WorkerReport,
-  ): ReportOutcome =>
+  ): ToolOutcome =>
     settleReport(recordReport({ store, taskId, report: workerReport }));
 
   const postWorkerReport = (
     taskId: string,
     workerReport: WorkerReport,
-  ): ReportOutcome =>
+  ): ToolOutcome =>
     settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
@@ -271,6 +287,7 @@ export const createTaskRunner = ({
         readThread: () =>
           readTaskThread({ threads, task: runningTask, ownerUserId }),
         report: (workerReport) => postWorkerReport(task.id, workerReport),
+        handBack: (reason) => handBack(task.id, reason),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live

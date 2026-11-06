@@ -22,15 +22,16 @@ export {
   type WorkerSessionOptions,
   type WorkerTurn,
 } from "./claude-session.ts";
+export { type HandBackOptions, handBackMessage } from "./hand-back-message.ts";
 export {
   type PrepareWorktree,
   prepareWorktree,
   type Worktree,
   type WorktreeRequest,
 } from "./prepare-worktree.ts";
+export { type ToolOutcome, toToolResult } from "./tool-outcome.ts";
 export {
   REPORT_STATES,
-  type ReportOutcome,
   type ReportState,
   type WorkerReport,
 } from "./record-report.ts";

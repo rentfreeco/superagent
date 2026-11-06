@@ -7,10 +7,10 @@ import type { Repo } from "../repos/config.ts";
 import type { Candidate } from "../store/candidates.ts";
 import type { Store } from "../store/open-store.ts";
 import type { AgentSessionEvents } from "../tasks/agent-session.ts";
+import type { ToolOutcome } from "../tasks/tool-outcome.ts";
 import { describeError } from "../utils/describe-error.ts";
 import {
   type DecisionContext,
-  type DecisionResult,
   decideAttach,
   decideIgnore,
   decideReply,
@@ -33,7 +33,8 @@ export interface RouterOptions {
   repos: ReadonlyMap<string, Repo>;
   /** Channel ID -> Repo, for the fallback. */
   channelRepos: ReadonlyMap<string, Repo>;
-  startSession: StartRouterSession;
+  /** Without one, the channel map decides every candidate as soon as it's queued. */
+  startSession?: StartRouterSession | undefined;
   wakeOutbox: () => void;
   wakeTaskRunner: () => void;
   logger: RouterLogger;
@@ -81,9 +82,9 @@ export const createRouter = ({
     wakeTaskRunner();
   };
 
-  const decided = (result: DecisionResult): DecisionResult => {
-    if (result.isAccepted) wakeWorkers();
-    return result;
+  const decided = (outcome: ToolOutcome): ToolOutcome => {
+    if (outcome.isAccepted) wakeWorkers();
+    return outcome;
   };
 
   const actions: RouterActions = {
@@ -157,11 +158,14 @@ export const createRouter = ({
     }
   };
 
-  const launch = (candidates: readonly Candidate[]): void => {
+  const launch = (
+    startRouterSession: StartRouterSession,
+    candidates: readonly Candidate[],
+  ): void => {
     store.candidates.markDelivered(candidates.map(({ id }) => id));
     let current: LiveRouter | undefined;
     try {
-      const session = startSession({
+      const session = startRouterSession({
         sessionId: store.kv.get(ROUTER_SESSION_KEY, z.string()) ?? null,
         candidates,
         actions,
@@ -177,6 +181,10 @@ export const createRouter = ({
 
   const reconcile = (): void => {
     if (!isRunning) return;
+    if (startSession === undefined) {
+      fallBack(store.candidates.undecided());
+      return;
+    }
     expireOverdue();
     if (live !== undefined) {
       if (live.isEnding) return;
@@ -187,7 +195,7 @@ export const createRouter = ({
       return;
     }
     const waiting = store.candidates.undecided();
-    if (waiting.length > 0) launch(waiting);
+    if (waiting.length > 0) launch(startSession, waiting);
   };
 
   const wake = guarded("routing", reconcile);

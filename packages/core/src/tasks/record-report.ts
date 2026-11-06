@@ -1,5 +1,6 @@
 import type { Store } from "../store/open-store.ts";
 import type { TaskState } from "../store/tasks.ts";
+import type { ToolOutcome } from "./tool-outcome.ts";
 
 export const REPORT_STATES = [
   "waiting",
@@ -16,11 +17,6 @@ export interface WorkerReport {
   summary: string;
   question?: string | undefined;
   prUrl?: string | undefined;
-}
-
-export interface ReportOutcome {
-  isAccepted: boolean;
-  reply: string;
 }
 
 export interface RecordReportOptions {
@@ -82,7 +78,7 @@ export const recordReport = ({
   store,
   taskId,
   report,
-}: RecordReportOptions): ReportOutcome =>
+}: RecordReportOptions): ToolOutcome =>
   store.transaction(() => {
     const problem = findProblem(report);
     if (problem !== undefined) return { isAccepted: false, reply: problem };

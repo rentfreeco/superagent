@@ -6,7 +6,7 @@ import type {
   StartConversation,
 } from "../tasks/agent-session.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
-import type { DecisionResult } from "./decide.ts";
+import type { ToolOutcome } from "../tasks/tool-outcome.ts";
 import { createRouterSessionStarter } from "./router-session.ts";
 import { createRouterTools, ROUTER_TOOL_NAMES } from "./router-tools.ts";
 
@@ -34,7 +34,7 @@ const candidate: Candidate = {
   decidedAt: null,
 };
 
-const accepted: DecisionResult = { isAccepted: true, reply: "Done." };
+const accepted: ToolOutcome = { isAccepted: true, reply: "Done." };
 
 const actions = {
   startTask: vi.fn(() => accepted),

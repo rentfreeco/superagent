@@ -1,6 +1,5 @@
 export {
   type DecisionContext,
-  type DecisionResult,
   decideAttach,
   decideIgnore,
   decideReply,

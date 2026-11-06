@@ -10,11 +10,7 @@ import { loadConfig, type Repo } from "@repo/core/repos";
 import { createRouter, createRouterSessionStarter } from "@repo/core/router";
 import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
-import {
-  createClaudeSessionStarter,
-  createTaskRunner,
-  startTask,
-} from "@repo/core/tasks";
+import { createClaudeSessionStarter, createTaskRunner } from "@repo/core/tasks";
 import {
   CONFIG_PATH,
   ROUTER_DIRECTORY_NAME,
@@ -76,6 +72,7 @@ const main = async (): Promise<void> => {
       sandbox: environment.workerSandbox,
     }),
     wakeOutbox: outboxSender.wake,
+    wakeRouter: () => router.wake(),
     logger: console,
     ownerUserId: environment.slackOwnerId,
   });
@@ -88,11 +85,13 @@ const main = async (): Promise<void> => {
     store,
     repos,
     channelRepos,
-    startSession: createRouterSessionStarter({
-      workingDirectory: routerDirectory,
-      repos,
-      channelRepos,
-    }),
+    startSession: environment.router
+      ? createRouterSessionStarter({
+          workingDirectory: routerDirectory,
+          repos,
+          channelRepos,
+        })
+      : undefined,
     wakeOutbox: outboxSender.wake,
     wakeTaskRunner: taskRunner.wake,
     logger: console,
@@ -106,12 +105,9 @@ const main = async (): Promise<void> => {
       logLevel: environment.logLevel,
       eventLog: store.events,
       onMessage: createMessageHandler({
-        channelRepos,
-        startTask,
         store,
         wakeOutbox: outboxSender.wake,
         wakeTaskRunner: taskRunner.wake,
-        routeThroughRouter: environment.router,
         wakeRouter: router.wake,
       }),
       onReaction: createReactionHandler({
@@ -151,7 +147,7 @@ const main = async (): Promise<void> => {
   });
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);
   taskRunner.start(slack);
-  if (environment.router) router.start();
+  router.start();
 };
 
 main().catch((error: unknown) => {

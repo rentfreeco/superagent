@@ -1,9 +1,9 @@
 import type { Repo } from "../repos/config.ts";
 import { routeMessage } from "../repos/route-message.ts";
 import type { Candidate } from "../store/candidates.ts";
+import type { ToolOutcome } from "../tasks/tool-outcome.ts";
 import {
   type DecisionContext,
-  type DecisionResult,
   decideReply,
   decideStartTask,
 } from "./decide.ts";
@@ -20,7 +20,7 @@ const UNROUTABLE_REPLY =
 export const decideByChannelMap = (
   { channelRepos, ...context }: ChannelMapContext,
   candidate: Candidate,
-): DecisionResult => {
+): ToolOutcome => {
   const decisionContext: DecisionContext = {
     ...context,
     decidedBy: "fallback",

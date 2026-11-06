@@ -211,6 +211,119 @@ describe("decisions", () => {
   });
 });
 
+describe("decisions for a handed-back message", () => {
+  const handBack = (
+    store: ReturnType<typeof setup>["store"],
+    taskId: string,
+    fields: Partial<InboundMessage> = {},
+  ) => {
+    const handedBack = store.candidates.add({
+      ...message({
+        eventId: "EvOffTopic",
+        channel: "C0MAPPED",
+        ts: "100.000002",
+        threadTs: "100.000001",
+        via: "thread",
+        ...fields,
+      }),
+      handedBackBy: taskId,
+      handBackReason: "Not about this task.",
+    });
+    if (handedBack === undefined) throw new Error("Not handed back");
+    return handedBack;
+  };
+
+  it("won't start a task in the thread of the task that handed it back, or attach it back to that task", () => {
+    const { context, queue, store } = setup();
+    const origin = queue({ channel: "C0MAPPED", via: "mention" });
+    decideStartTask(context, {
+      candidateId: origin.id,
+      repo: "superagent",
+      reason: "A request.",
+    });
+    const [task] = store.tasks.withState(["queued"]);
+    if (task === undefined) throw new Error("No task started");
+    store.events.record({
+      eventId: "EvOffTopic",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: "100.000001",
+      user: "U0OWNER",
+      text: "fix the flaky test in superagent",
+    });
+    const handedBack = handBack(store, task.id);
+
+    expect(
+      decideStartTask(context, {
+        candidateId: handedBack.id,
+        repo: "superagent",
+        reason: "A new request.",
+      }),
+    ).toEqual({
+      isAccepted: false,
+      reply: `This message is in task ${task.id}'s thread, so no task can start from it. Reply asking the owner to send it as a new message, or attach it to the task it is about.`,
+    });
+    expect(
+      decideAttach(context, {
+        candidateId: handedBack.id,
+        taskId: task.id,
+        reason: "It is about this task after all.",
+      }).isAccepted,
+    ).toBe(false);
+    expect(
+      decideReply(context, {
+        candidateId: handedBack.id,
+        text: "Send that as a new message and I'll start it.",
+        reason: "A new request in another task's thread.",
+      }).isAccepted,
+    ).toBe(true);
+    expect(store.events.get("EvOffTopic")?.disposition).toBe("replied");
+  });
+
+  it("refuses to attach a message the router already gave one task to another", () => {
+    const { context, queue, store } = setup();
+    const first = store.tasks.create({
+      title: "First",
+      repo: "superagent",
+      originChannel: "C0MAPPED",
+      originTs: "300.000001",
+    });
+    const second = store.tasks.create({
+      title: "Second",
+      repo: "superagent",
+      originChannel: "C0MAPPED",
+      originTs: "400.000001",
+    });
+    const dm = queue();
+    decideAttach(context, {
+      candidateId: dm.id,
+      taskId: first.id,
+      reason: "It names the first task.",
+    });
+    const handedBack = handBack(store, first.id, {
+      eventId: dm.eventId,
+      channel: dm.channel,
+      ts: dm.ts,
+      threadTs: dm.threadTs,
+      via: "dm",
+    });
+
+    expect(
+      decideAttach(context, {
+        candidateId: handedBack.id,
+        taskId: second.id,
+        reason: "Maybe the second one.",
+      }),
+    ).toEqual({
+      isAccepted: false,
+      reply:
+        "This message was already passed to a task, which handed it back. Reply, start a task, or ignore it.",
+    });
+    expect(store.inputs.unread(second.id)).toEqual([]);
+  });
+});
+
 describe("decideByChannelMap", () => {
   it("starts a task for a mention in a mapped channel, and answers a DM as before", () => {
     const { context, queue, queuedPosts, store } = setup();
