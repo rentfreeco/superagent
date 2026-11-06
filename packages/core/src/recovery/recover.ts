@@ -1,6 +1,7 @@
 import type { StoredEvent } from "../store/events.ts";
 import type { Store } from "../store/open-store.ts";
 import type { TaskState } from "../store/tasks.ts";
+import { describeError } from "../utils/describe-error.ts";
 
 export interface RecoveryCatchUpTarget {
   channel: string;
@@ -59,9 +60,6 @@ const OPEN_TASK_STATES: readonly TaskState[] = [
   "waiting",
   "ready",
 ];
-
-const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 export const takeRecoverySnapshot = ({
   store,
