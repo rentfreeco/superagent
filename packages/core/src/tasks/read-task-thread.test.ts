@@ -92,4 +92,64 @@ describe("readTaskThread", () => {
     expect(text).toContain("second");
     expect(text).toContain("third");
   });
+
+  it("counts the separators and notices against the limit, so many short messages stay within it", async () => {
+    const { thread } = read([
+      { ts: "100.000000", user: "U0SOMEONE", text: "hi", fromSelf: false },
+      ...Array.from({ length: 4_000 }, (_, index) => ({
+        ts: `101.${String(index).padStart(6, "0")}`,
+        user: "U0OWNER",
+        text: `m${index}`,
+        fromSelf: false,
+      })),
+    ]);
+
+    const text = await thread;
+    expect(text.length).toBeLessThanOrEqual(TASK_THREAD_READ_MAX_LENGTH);
+    expect(text.length).toBeGreaterThan(TASK_THREAD_READ_MAX_LENGTH - 20);
+    expect(text).toMatch(/^\(\d+ earlier messages left out for length\.\)/);
+    expect(text).toContain("messages from other people left out");
+    expect(text.endsWith("[owner]\nm3999")).toBe(true);
+  });
+
+  it("shortens a newest message too long to fit on its own, to exactly the limit", async () => {
+    const { thread } = read([
+      {
+        ts: "100.000001",
+        user: "U0OWNER",
+        text: "an earlier message",
+        fromSelf: false,
+      },
+      {
+        ts: "100.000002",
+        user: "U0OWNER",
+        text: "a".repeat(TASK_THREAD_READ_MAX_LENGTH),
+        fromSelf: false,
+      },
+    ]);
+
+    const text = await thread;
+    expect(text).toHaveLength(TASK_THREAD_READ_MAX_LENGTH);
+    expect(
+      text.startsWith(
+        "(1 earlier messages left out for length.)\n\n[owner]\naaa",
+      ),
+    ).toBe(true);
+    expect(text.endsWith("a…")).toBe(true);
+  });
+
+  it("fills the limit exactly with a single long message and no notices", async () => {
+    const { thread } = read([
+      {
+        ts: "100.000001",
+        user: "U0OWNER",
+        text: "a".repeat(TASK_THREAD_READ_MAX_LENGTH),
+        fromSelf: false,
+      },
+    ]);
+
+    const text = await thread;
+    expect(text).toHaveLength(TASK_THREAD_READ_MAX_LENGTH);
+    expect(text.startsWith("[owner]\naaa")).toBe(true);
+  });
 });

@@ -209,6 +209,7 @@ const taskRunner = createTaskRunner({
   startSession: createClaudeSessionStarter(),
   wakeOutbox: outboxSender.wake,
   logger: console,
+  ownerUserId, // U…, whose messages read_thread shows
 });
 taskRunner.start(slack); // after restart recovery; the gateway reads threads
 taskRunner.wake(); // after the handler writes rows
@@ -219,7 +220,7 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 - **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
 - **Worker tools:** the worker reaches Slack only through three tools.
   - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
-  - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, newest that fit in 40,000 characters. Other people's messages are left out and counted.
+  - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
   - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
 - **Follow-ups:** a message in the task's thread becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
 - **Stop:** the word `stop` alone in the thread marks the task stopped and drops what the worker hadn't read. The runner interrupts the session, the branch stays, and the thread gets a one-line confirmation. On a `done`, `failed`, or `blocked` task it cancels a retry still waiting to start, and the task keeps its state.
