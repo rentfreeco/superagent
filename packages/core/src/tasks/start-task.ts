@@ -13,6 +13,8 @@ export interface TaskRequest {
   message: InboundMessage;
   repo: Repo;
   store: TaskRequestStore;
+  /** A title chosen for the task; the message's first line otherwise. */
+  title?: string | undefined;
 }
 
 const UNTITLED_TASK = "Untitled request";
@@ -27,9 +29,16 @@ const titleFromRequest = (text: string): string => {
     : truncateText(firstLine, TASK_TITLE_MAX_LENGTH);
 };
 
-export const startTask = ({ message, repo, store }: TaskRequest): undefined => {
+export const startTask = ({
+  message,
+  repo,
+  store,
+  title,
+}: TaskRequest): undefined => {
   const task = store.tasks.create({
-    title: titleFromRequest(message.text),
+    title: title?.trim()
+      ? truncateText(title.trim(), TASK_TITLE_MAX_LENGTH)
+      : titleFromRequest(message.text),
     repo: repo.name,
     originChannel: message.channel,
     originTs: message.threadTs,

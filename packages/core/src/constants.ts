@@ -22,3 +22,7 @@ export const RECOVERY_ENDED_TASK_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 export const WORKER_MODEL = "claude-opus-5-5";
 export const WORKER_EFFORT = "high";
+
+export const ROUTER_TASK_LIST_LIMIT = 30;
+export const ROUTER_EFFORT = "low";
+export const ROUTER_POLL_INTERVAL_MS = 5_000;
