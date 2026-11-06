@@ -1,4 +1,15 @@
 export {
+  type Candidate,
+  type CandidateStore,
+  type NewCandidate,
+} from "./candidates.ts";
+export {
+  type Decision,
+  type DecisionOutcome,
+  type DecisionStore,
+  type NewDecision,
+} from "./decisions.ts";
+export {
   type EventDisposition,
   type EventStore,
   type NewEvent,

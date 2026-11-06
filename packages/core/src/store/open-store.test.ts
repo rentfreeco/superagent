@@ -4,9 +4,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { MIGRATIONS } from "./migrations.ts";
 import { openTestStore } from "./open-test-store.ts";
 import { openStore, requireWriteAheadLog } from "./open-store.ts";
+import { MIGRATIONS } from "./migrations.ts";
 
 let workspaceDirectory = "";
 
@@ -59,7 +59,9 @@ describe("openStore", () => {
     database.close();
 
     expect(() => openStore({ path: databasePath })).toThrow(
-      /schema version 99, but this code only knows up to 1/,
+      new RegExp(
+        `schema version 99, but this code only knows up to ${MIGRATIONS.length}`,
+      ),
     );
   });
 

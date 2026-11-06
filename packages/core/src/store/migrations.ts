@@ -104,6 +104,36 @@ export const MIGRATIONS: readonly string[] = [
     updated_at integer not null
   );
   `,
+  `
+  create table candidates (
+    id integer primary key,
+    event_id text not null references events (event_id),
+    channel text not null,
+    ts text not null,
+    thread_ts text not null,
+    user text not null,
+    text text not null,
+    via text not null check (via in ('dm', 'mention', 'thread')),
+    handed_back_by text references tasks (id),
+    hand_back_reason text,
+    created_at integer not null,
+    delivered_at integer,
+    decided_at integer
+  );
+  create unique index candidates_once on candidates (event_id, coalesce(handed_back_by, ''));
+  create index candidates_undecided on candidates (id) where decided_at is null;
+
+  create table decisions (
+    id integer primary key,
+    candidate_id integer not null references candidates (id),
+    outcome text not null check (outcome in ('start_task', 'reply', 'attach', 'stop', 'ignore')),
+    task_id text references tasks (id),
+    reason text not null,
+    decided_by text not null check (decided_by in ('router', 'fallback')),
+    created_at integer not null
+  );
+  create unique index decisions_once on decisions (candidate_id);
+  `,
 ];
 
 const userVersionSchema = z.object({ user_version: z.number() });

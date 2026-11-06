@@ -3,6 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { SQLITE_BUSY_TIMEOUT_MS } from "../constants.ts";
+import { type CandidateStore, createCandidateStore } from "./candidates.ts";
+import { createDecisionStore, type DecisionStore } from "./decisions.ts";
 import { createEventStore, type EventStore } from "./events.ts";
 import { createInputStore, type InputStore } from "./inputs.ts";
 import { createKeyValueStore, type KeyValueStore } from "./kv.ts";
@@ -28,6 +30,8 @@ export interface Store {
   reports: ReportStore;
   outbox: OutboxStore;
   kv: KeyValueStore;
+  candidates: CandidateStore;
+  decisions: DecisionStore;
   transaction: Transaction;
   close(): void;
 }
@@ -72,6 +76,8 @@ export const openStore = ({
       reports: createReportStore(database, now),
       outbox: createOutboxStore(database, now),
       kv: createKeyValueStore(database, now),
+      candidates: createCandidateStore(database, transaction, now),
+      decisions: createDecisionStore(database, now),
       transaction,
       close: () => database.close(),
     };
