@@ -78,6 +78,13 @@ describe("refusalFor commands", () => {
     "bash -lc 'gh pr merge 42'",
     'echo "$(gh pr merge 42)"',
     "(cd /tmp && gh issue close 7)",
+    "if gh pr merge 42; then echo merged; fi",
+    "env -i gh pr merge 42",
+    "sudo -u bot gh pr merge 42",
+    "echo 42 | xargs gh pr merge",
+    "for n in 7; do gh issue close $n; done",
+    "! git push -f",
+    "echo gh pr merge",
   ])("refuses `%s`", async (command) => {
     expect(await bash(command)).toEqual(expect.any(String));
   });
@@ -93,7 +100,8 @@ describe("refusalFor commands", () => {
     "git log main..HEAD",
     "git checkout -b agent/abcd2345 origin/main",
     "git push origin agent/maintenance",
-    "echo gh pr merge",
+    'echo "gh pr merge"',
+    "grep -rn gh src",
   ])("allows `%s`", async (command) => {
     expect(await bash(command)).toBeUndefined();
   });
@@ -162,6 +170,32 @@ describe("refusalFor files", () => {
     expect(
       await refusalFor("Write", { file_path: "src/new-file.ts" }, files),
     ).toBeUndefined();
+  });
+
+  it("refuses reads of a credential directory that is itself a link, by either path", async () => {
+    const files = await setupFiles();
+    const dotfiles = path.join(
+      path.dirname(files.homeDirectory),
+      "dotfiles",
+      "ssh",
+    );
+    await mkdir(dotfiles, { recursive: true });
+    await writeFile(path.join(dotfiles, "id_ed25519"), "secret");
+    await symlink(dotfiles, path.join(files.homeDirectory, ".ssh"));
+
+    expect(
+      await refusalFor("Read", { file_path: "~/.ssh/id_ed25519" }, files),
+    ).toMatch(/credential/);
+    expect(
+      await refusalFor(
+        "Read",
+        { file_path: path.join(dotfiles, "id_ed25519") },
+        files,
+      ),
+    ).toMatch(/credential/);
+    expect(
+      await refusalFor("Grep", { path: path.dirname(dotfiles) }, files),
+    ).toMatch(/holds credential files/);
   });
 
   it("refuses a search whose root holds credential files, and allows one inside the worktree", async () => {

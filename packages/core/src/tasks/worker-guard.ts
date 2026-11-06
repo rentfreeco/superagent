@@ -28,17 +28,6 @@ const FILE_WRITING_TOOLS = new Set([
   "NotebookEdit",
 ]);
 const SEARCH_TOOLS = new Set(["Grep", "Glob"]);
-const COMMAND_WRAPPERS = new Map([
-  ["env", 0],
-  ["command", 0],
-  ["exec", 0],
-  ["nohup", 0],
-  ["nice", 0],
-  ["time", 0],
-  ["sudo", 0],
-  ["timeout", 1],
-]);
-const ENVIRONMENT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const GH_OPTIONS_WITH_VALUES = new Set(["-R", "--repo"]);
 const GIT_OPTIONS_WITH_VALUES = new Set([
   "-C",
@@ -78,23 +67,6 @@ const preToolUseSchema = z.object({
   tool_name: z.string(),
   tool_input: z.unknown(),
 });
-
-const programWords = (words: readonly string[]): string[] => {
-  let start = 0;
-  for (;;) {
-    const word = words[start];
-    if (word === undefined) return [];
-    if (ENVIRONMENT_ASSIGNMENT.test(word)) {
-      start += 1;
-      continue;
-    }
-    const wrapperArgumentCount = COMMAND_WRAPPERS.get(path.basename(word));
-    if (wrapperArgumentCount === undefined) break;
-    start += 1 + wrapperArgumentCount;
-  }
-  const [program = "", ...args] = words.slice(start);
-  return [path.basename(program), ...args];
-};
 
 const positionalIndexes = (
   args: readonly string[],
@@ -182,15 +154,22 @@ const commandRefusal = (
   command: string,
   baseBranch: string,
 ): string | undefined => {
+  // Any word of a command can start the gh or git it runs, after a keyword
+  // (if, do, !), a wrapper and its options (env -i, sudo -u bot, xargs), or a
+  // VAR=value prefix, so every position is checked. An unquoted mention, such
+  // as `echo gh pr merge`, is refused with them.
   for (const words of splitShellCommands(command)) {
-    const [program, ...args] = programWords(words);
-    const refusal =
-      program === "gh"
-        ? ghRefusal(args)
-        : program === "git"
-          ? gitRefusal(args, baseBranch)
-          : undefined;
-    if (refusal !== undefined) return refusal;
+    for (const [index, word] of words.entries()) {
+      const program = path.basename(word);
+      const args = words.slice(index + 1);
+      const refusal =
+        program === "gh"
+          ? ghRefusal(args)
+          : program === "git"
+            ? gitRefusal(args, baseBranch)
+            : undefined;
+      if (refusal !== undefined) return refusal;
+    }
   }
   return undefined;
 };
@@ -202,11 +181,6 @@ const isInside = (directory: string, filePath: string): boolean => {
     (!relative.startsWith("..") && !path.isAbsolute(relative))
   );
 };
-
-const credentialPaths = (homeDirectory: string): string[] =>
-  [...CREDENTIAL_DIRECTORIES, ...CREDENTIAL_FILES].map((name) =>
-    path.join(homeDirectory, name),
-  );
 
 const realPathOf = async (filePath: string): Promise<string> => {
   const missingSegments: string[] = [];
@@ -223,6 +197,18 @@ const realPathOf = async (filePath: string): Promise<string> => {
   }
 };
 
+const credentialPaths = async (homeDirectory: string): Promise<string[]> => {
+  const linkedPaths = [...CREDENTIAL_DIRECTORIES, ...CREDENTIAL_FILES].map(
+    (name) => path.join(homeDirectory, name),
+  );
+  return [
+    ...new Set([
+      ...linkedPaths,
+      ...(await Promise.all(linkedPaths.map(realPathOf))),
+    ]),
+  ];
+};
+
 const resolvePath = (
   { worktreePath, homeDirectory }: WorkerGuardOptions,
   filePath: string,
@@ -236,13 +222,11 @@ const fileRefusal = async (
   target: string,
   options: WorkerGuardOptions,
 ): Promise<string | undefined> => {
-  const [filePath, worktreePath, gitDirectory, homeDirectory] =
-    await Promise.all([
-      realPathOf(resolvePath(options, target)),
-      realPathOf(options.worktreePath),
-      realPathOf(options.gitDirectory),
-      realPathOf(options.homeDirectory),
-    ]);
+  const [filePath, worktreePath, gitDirectory] = await Promise.all([
+    realPathOf(resolvePath(options, target)),
+    realPathOf(options.worktreePath),
+    realPathOf(options.gitDirectory),
+  ]);
   if (
     FILE_WRITING_TOOLS.has(toolName) &&
     !isInside(worktreePath, filePath) &&
@@ -250,7 +234,7 @@ const fileRefusal = async (
   ) {
     return `Writing outside your worktree (${options.worktreePath}) is refused.`;
   }
-  const credentials = credentialPaths(homeDirectory);
+  const credentials = await credentialPaths(options.homeDirectory);
   const isCredential = credentials.some((credential) =>
     isInside(credential, filePath),
   );
