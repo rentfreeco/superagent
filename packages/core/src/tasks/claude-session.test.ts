@@ -12,6 +12,7 @@ import {
   createAckTool,
   createClaudeSessionStarter,
   createHandBackTool,
+  createNothingToReportTool,
   createReadThreadTool,
   createReportTool,
   WORKER_BUILT_IN_TOOLS,
@@ -118,6 +119,7 @@ const setup = ({
       reply: "Posted.",
     }),
     handBack: () => ({ isAccepted: true, reply: "Handed back." }),
+    nothingToReport: () => ({ isAccepted: true, reply: "Nothing posted." }),
     events,
   });
   const [request] = requests;
@@ -190,6 +192,7 @@ describe("createClaudeSessionStarter", () => {
         "mcp__superagent__read_thread",
         "mcp__superagent__report",
         "mcp__superagent__hand_back",
+        "mcp__superagent__nothing_to_report",
       ]),
     );
     expect(request.options.allowedTools).not.toContain("AskUserQuestion");
@@ -449,6 +452,31 @@ describe("createHandBackTool", () => {
     expect(answer).toEqual({
       content: [{ type: "text", text: "Handed the message back." }],
       isError: false,
+    });
+  });
+});
+
+describe("createNothingToReportTool", () => {
+  it("passes the call on and answers with the outcome", async () => {
+    const nothingToReport = vi.fn((): ToolOutcome => ({
+      isAccepted: false,
+      reply:
+        "Use nothing_to_report only in a turn where you handed a message back.",
+    }));
+    const nothingToReportTool = createNothingToReportTool(nothingToReport);
+
+    const answer = await nothingToReportTool.handler({}, undefined);
+
+    expect(nothingToReportTool.name).toBe("nothing_to_report");
+    expect(nothingToReport).toHaveBeenCalledOnce();
+    expect(answer).toEqual({
+      content: [
+        {
+          type: "text",
+          text: "Use nothing_to_report only in a turn where you handed a message back.",
+        },
+      ],
+      isError: true,
     });
   });
 });

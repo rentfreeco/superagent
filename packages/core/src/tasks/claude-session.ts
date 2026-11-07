@@ -45,6 +45,7 @@ export interface WorkerSessionOptions {
   readThread(): Promise<string>;
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
+  nothingToReport(): ToolOutcome;
   events: WorkerSessionEvents;
 }
 
@@ -84,7 +85,7 @@ export const WORKER_BUILT_IN_TOOLS = [
 
 const WORKER_TOOLS = [
   ...WORKER_BUILT_IN_TOOLS,
-  ...["ack", "read_thread", "report", "hand_back"].map(
+  ...["ack", "read_thread", "report", "hand_back", "nothing_to_report"].map(
     (toolName) => `mcp__${WORKER_SERVER_NAME}__${toolName}`,
   ),
 ];
@@ -247,6 +248,16 @@ export const createHandBackTool = (
     async (args) => toToolResult(handBack(args.message_id, args.reason)),
   );
 
+export const createNothingToReportTool = (
+  nothingToReport: WorkerSessionOptions["nothingToReport"],
+) =>
+  tool(
+    "nothing_to_report",
+    "End this turn without posting anything, leaving the task where it stood. Use it only when this turn handed messages back and nothing else needs an answer.",
+    {},
+    async () => toToolResult(nothingToReport()),
+  );
+
 export const createClaudeSessionStarter =
   ({
     startConversation = query,
@@ -263,6 +274,7 @@ export const createClaudeSessionStarter =
     readThread,
     report,
     handBack,
+    nothingToReport,
     events,
   }) => {
     const gitDirectory = path.join(repo.path, ".git");
@@ -308,6 +320,7 @@ export const createClaudeSessionStarter =
               createReadThreadTool(readThread),
               createReportTool(report),
               createHandBackTool(handBack),
+              createNothingToReportTool(nothingToReport),
             ],
           }),
         },

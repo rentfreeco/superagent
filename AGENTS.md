@@ -113,8 +113,8 @@ packages/
                                a restart, ends stopped and idle sessions, caps concurrency; gets
                                the Slack thread reader at start
         claude-session.ts      createClaudeSessionStarter: one Agent SDK query per session, fed
-                               inputs as streamed prompts; the ack, read_thread, report, and
-                               hand_back MCP tools
+                               inputs as streamed prompts; the ack, read_thread, report,
+                               hand_back, and nothing_to_report MCP tools
         acknowledge-messages.ts acknowledgeMessages: the worker's ack, an 👀 on each Slack
                                message it was given and hasn't finished, as ack:<event_id>
         read-task-thread.ts    readTaskThread: the worker's read_thread, the owner's and the
@@ -220,11 +220,11 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 
 - MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
 - An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
-- A worker has four tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages it was given and hasn't finished, `read_thread` reads the task's thread, `report` posts where the task stands, and `hand_back` gives the router a message that isn't about the task. Nothing reacts to or answers the owner until the worker does.
+- A worker has five tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages it was given and hasn't finished, `read_thread` reads the task's thread, `report` posts where the task stands, `hand_back` gives the router a message that isn't about the task, and `nothing_to_report` ends a turn that only handed messages back. Nothing reacts to or answers the owner until the worker does.
 - MUST: Show a worker only the owner's messages and the bot's own. `read_thread` leaves out everyone else's, since the owner gate is the only access control and workers run unattended.
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
 - A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
-- A turn that ends idle without a report posts the worker's last message and waits on the owner, unless every message it read was handed back: then the task quietly returns to its last reported state; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.
+- A turn that ends idle without a report posts the worker's last message and waits on the owner, unless the worker called `nothing_to_report` in that turn: then the task quietly returns to its last reported state. The runner accepts `nothing_to_report` only in a turn that handed a message back, for a task that has reported before. It doesn't guess from turn timing whether anything is left unanswered, since the SDK doesn't say when within a turn a folded-in message was read; a turn that fails, a session that ends early, or a launch that fails marks the task `failed`. The owner's next message in the thread resumes it.
 - The owner stops a task with `stop` alone in its thread, or 🛑 on its first message or one of the owner's messages there. Stopping drops every input the worker hadn't read, in the handler's transaction, and marks the task `stopped` when its state allows. A `done`, `failed`, or `blocked` task keeps its state, but a retry still waiting for a session slot is cancelled. The runner then interrupts any live session. The branch and worktree stay.
 - Restart recovery catches up the threads of open tasks and of tasks that ended in the last seven days (`RECOVERY_ENDED_TASK_WINDOW_MS`), since a reply can resume an ended task and channel history doesn't include thread replies.
 - `git fetch origin <branch>` updates `origin/<branch>` only when the remote's fetch refspec covers it, which a single-branch or shallow clone's doesn't, and two fetches in one checkout at once fail on the ref lock. `prepareWorktree` fetches into an explicit `refs/remotes/origin/<branch>` and runs one checkout's git commands one at a time.
@@ -243,7 +243,7 @@ Every owner message no task owns, a DM or a mention outside a task's thread, is 
 - When the router doesn't decide a candidate (its turn goes idle, its session fails or can't start, or the candidate waits past `ROUTER_DECISION_TIMEOUT_MS`), the channel map decides it, recorded as `decidedBy: "fallback"`.
 - The handler leaves a candidate's event `received` until a decision settles it. Restart recovery replays it, and queuing it again is a no-op.
 - MUST: When a task takes over a thread, pass it the candidates still waiting there, in the same transaction (`decideStartTask` does). Otherwise a replay after a restart gives the waiting message to the task as a follow-up while its candidate is still routed.
-- A worker sees each Slack message as `[message N]`, the input's ID. Its `hand_back` names one and queues it as a new candidate naming the task and why, once per task. The task's first input, its request, can't be handed back. The worker doesn't report about a message it handed back, since the router answers it. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
+- A worker sees each Slack message as `[message N]`, the input's ID. Its `hand_back` names one and queues it as a new candidate naming the task and why, once per task. The task's first input, its request, can't be handed back. The worker doesn't report about a message it handed back, since the router answers it; when that was all the turn had to do, it calls `nothing_to_report`. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
 - `SUPERAGENT_ROUTER=off` runs the router without a session: the channel map decides every candidate as soon as it's queued.
 
 ## Slack

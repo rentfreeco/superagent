@@ -41,7 +41,6 @@ export interface CandidateStore {
   undecided(): Candidate[];
   markDelivered(candidateIds: readonly number[]): void;
   markDecided(candidateId: number): boolean;
-  isHandedBack(eventId: string, taskId: string): boolean;
 }
 
 const CANDIDATE_COLUMNS =
@@ -64,9 +63,6 @@ export const createCandidateStore = (
   const selectUndelivered = database.prepare(
     `select ${CANDIDATE_COLUMNS} from candidates
      where decided_at is null and delivered_at is null order by id`,
-  );
-  const selectHandedBack = database.prepare(
-    "select 1 from candidates where event_id = :eventId and handed_back_by = :taskId",
   );
   const selectUndecided = database.prepare(
     `select ${CANDIDATE_COLUMNS} from candidates
@@ -103,7 +99,5 @@ export const createCandidateStore = (
     },
     markDecided: (candidateId) =>
       Number(updateDecided.run({ id: candidateId, now: now() }).changes) > 0,
-    isHandedBack: (eventId, taskId) =>
-      selectHandedBack.get({ eventId, taskId }) !== undefined,
   };
 };
