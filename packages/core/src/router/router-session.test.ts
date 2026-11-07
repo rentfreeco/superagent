@@ -99,6 +99,10 @@ it("passes each routing tool's arguments to the router's actions", async () => {
     { candidate_id: 7, repo: "superagent", title: "Fix it", reason: "Asked." },
     undefined,
   );
+  await tools.ignore.handler(
+    { candidate_id: 7, reason: "Thanks.", reaction: "heart" },
+    undefined,
+  );
   const listed = await tools.list_tasks.handler({ which: "open" }, undefined);
 
   expect(actions.startTask).toHaveBeenCalledWith({
@@ -106,6 +110,11 @@ it("passes each routing tool's arguments to the router's actions", async () => {
     repo: "superagent",
     title: "Fix it",
     reason: "Asked.",
+  });
+  expect(actions.ignore).toHaveBeenCalledWith({
+    candidateId: 7,
+    reason: "Thanks.",
+    reaction: "heart",
   });
   expect(listed).toEqual({
     content: [{ type: "text", text: "There are no open tasks." }],

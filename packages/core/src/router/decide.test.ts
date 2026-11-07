@@ -142,7 +142,11 @@ describe("decisions", () => {
     });
 
     expect(
-      decideIgnore(context, { candidateId: candidate.id, reason: "late" }),
+      decideIgnore(context, {
+        candidateId: candidate.id,
+        reason: "late",
+        reaction: "thumbsup",
+      }),
     ).toEqual({
       isAccepted: false,
       reply: `Candidate ${candidate.id} is already decided.`,
@@ -200,13 +204,43 @@ describe("decisions", () => {
     ]);
   });
 
-  it("ignores a message and settles it as ignored", () => {
+  it("ignores a message with a reaction on it, once, and settles it as ignored", () => {
     const { context, queue, store } = setup();
     const candidate = queue({ text: "thanks!" });
+
     expect(
-      decideIgnore(context, { candidateId: candidate.id, reason: "Thanks." })
-        .isAccepted,
-    ).toBe(true);
+      decideIgnore(context, {
+        candidateId: candidate.id,
+        reason: "Thanks.",
+        reaction: "heart",
+      }),
+    ).toEqual({
+      isAccepted: true,
+      reply: "Reacted with :heart: and left it there.",
+    });
+    decideIgnore(context, {
+      candidateId: candidate.id,
+      reason: "Thanks again.",
+      reaction: "heart",
+    });
+
+    expect(
+      store.outbox
+        .pending()
+        .map(({ dedupeKey, channel, threadTs, message }) => ({
+          dedupeKey,
+          channel,
+          threadTs,
+          message,
+        })),
+    ).toEqual([
+      {
+        dedupeKey: "ignore:EvDm",
+        channel: "D0OWNER",
+        threadTs: null,
+        message: { kind: "reaction", name: "heart", timestamp: "100.000001" },
+      },
+    ]);
     expect(store.events.get("EvDm")?.disposition).toBe("ignored");
   });
 });

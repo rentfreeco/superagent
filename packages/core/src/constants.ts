@@ -13,6 +13,13 @@ export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 export const TASK_TITLE_MAX_LENGTH = 80;
 export const TASK_ACK_REACTION = "eyes";
 export const TASK_STOP_REACTION = "octagonal_sign";
+/** What the router reacts with to a message it lets be: thanks, an acknowledgement, a greeting, or anything else. */
+export const ROUTER_IGNORE_REACTIONS = [
+  "heart",
+  "thumbsup",
+  "wave",
+  "white_check_mark",
+] as const;
 export const TASK_MAX_SESSIONS = 3;
 export const TASK_RUNNER_POLL_INTERVAL_MS = 5_000;
 export const TASK_FALLBACK_SUMMARY_MAX_LENGTH = 3_000;

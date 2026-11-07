@@ -239,6 +239,7 @@ Every owner message no task owns, a DM or a mention outside a task's thread, is 
 
 - MUST: Give every candidate exactly one decision, through the functions in `decide.ts`. Each records the decision, writes its rows, and settles the event in one transaction, and refuses a candidate already decided.
 - MUST: Keep the router to routing. Its session has no built-in tools, no MCP server but its own (`strictMcpConfig`), loads no settings files, and is allowed only the routing tools. Never give it a tool that reads code or runs commands; the worker owns the work.
+- `ignore` still answers with a reaction (`ROUTER_IGNORE_REACTIONS`, queued as `ignore:<event_id>`), so no message the owner sends goes unacknowledged.
 - When the router doesn't decide a candidate (its turn goes idle, its session fails or can't start, or the candidate waits past `ROUTER_DECISION_TIMEOUT_MS`), the channel map decides it, recorded as `decidedBy: "fallback"`.
 - The handler leaves a candidate's event `received` until a decision settles it. Restart recovery replays it, and queuing it again is a no-op.
 - MUST: When a task takes over a thread, pass it the candidates still waiting there, in the same transaction (`decideStartTask` does). Otherwise a replay after a restart gives the waiting message to the task as a follow-up while its candidate is still routed.
