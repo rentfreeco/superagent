@@ -45,6 +45,8 @@ packages/
         gateway.ts             SlackGateway: connect (auth.test, then Bolt App, then start),
                                fetchThread, post, react, findPost, classifyFailure, replay,
                                catchUp, close
+        resolve-bot-identity.ts resolveBotIdentity: the bot's IDs from auth.test, refusing a
+                               token with none or an owner ID that is the bot's own
         inbound.ts             the global gate (record the event once, then self, then owner,
                                then handled types); the listeners for DMs, @-mentions, replies
                                in followed threads (isFollowedThread), which claim the message

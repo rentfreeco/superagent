@@ -23,6 +23,7 @@ import {
   replayEvent,
   type SlackEventRecord,
 } from "./inbound.ts";
+import { resolveBotIdentity } from "./resolve-bot-identity.ts";
 import { type BotIdentity, fetchThread, type ThreadMessage } from "./thread.ts";
 
 export type SlackMessageHandler = (
@@ -102,12 +103,7 @@ export class SlackGateway {
     logLevel,
   }: SlackGatewayOptions): Promise<SlackGateway> {
     const auth = await new webApi.WebClient(botToken).auth.test();
-    if (auth.user_id === undefined || auth.bot_id === undefined) {
-      throw new Error(
-        "slack: auth.test returned no bot identity; is botToken a bot (xoxb-) token?",
-      );
-    }
-    const identity: BotIdentity = { userId: auth.user_id, botId: auth.bot_id };
+    const identity = resolveBotIdentity(auth, ownerUserId);
 
     const app = new App({
       token: botToken,
