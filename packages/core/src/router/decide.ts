@@ -1,3 +1,4 @@
+import type { ROUTER_IGNORE_REACTIONS } from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import type { InboundMessage } from "../slack/inbound.ts";
 import type { Candidate } from "../store/candidates.ts";
@@ -52,9 +53,13 @@ export interface TaskDecision {
   reason: string;
 }
 
+export type IgnoreReaction = (typeof ROUTER_IGNORE_REACTIONS)[number];
+
 export interface IgnoreDecision {
   candidateId: number;
   reason: string;
+  /** Put on the message, so the owner sees it was read. */
+  reaction: IgnoreReaction;
 }
 
 const refused = (reply: string): ToolOutcome => ({
@@ -245,11 +250,19 @@ export const decideStop = (
 
 export const decideIgnore = (
   context: DecisionContext,
-  { candidateId, reason }: IgnoreDecision,
+  { candidateId, reason, reaction }: IgnoreDecision,
 ): ToolOutcome =>
-  settle(context, candidateId, reason, () => ({
-    outcome: "ignore",
-    taskId: null,
-    disposition: "ignored",
-    reply: "Ignored.",
-  }));
+  settle(context, candidateId, reason, (candidate) => {
+    context.store.outbox.enqueue({
+      dedupeKey: `ignore:${candidate.eventId}`,
+      channel: candidate.channel,
+      threadTs: null,
+      message: { kind: "reaction", name: reaction, timestamp: candidate.ts },
+    });
+    return {
+      outcome: "ignore",
+      taskId: null,
+      disposition: "ignored",
+      reply: `Reacted with :${reaction}: and left it there.`,
+    };
+  });

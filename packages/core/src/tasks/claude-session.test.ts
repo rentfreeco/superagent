@@ -12,8 +12,10 @@ import {
   createAckTool,
   createClaudeSessionStarter,
   createHandBackTool,
+  createNothingToReportTool,
   createReadThreadTool,
   createReportTool,
+  WORKER_BUILT_IN_TOOLS,
   WORKER_SERVER_NAME,
 } from "./claude-session.ts";
 import type { WorkerReport } from "./record-report.ts";
@@ -117,6 +119,7 @@ const setup = ({
       reply: "Posted.",
     }),
     handBack: () => ({ isAccepted: true, reply: "Handed back." }),
+    nothingToReport: () => ({ isAccepted: true, reply: "Nothing posted." }),
     events,
   });
   const [request] = requests;
@@ -160,6 +163,7 @@ describe("createClaudeSessionStarter", () => {
       LC_ALL: "en_US.UTF-8",
       ANTHROPIC_API_KEY: "sk-ant-test",
       GH_TOKEN: "ghp_test",
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     });
     expect(request.options).not.toHaveProperty(
       "allowDangerouslySkipPermissions",
@@ -170,8 +174,14 @@ describe("createClaudeSessionStarter", () => {
     ]);
   });
 
-  it("allows only its working tools, including the superagent ones, and guards each call", async () => {
+  it("loads only its working tools and its own MCP server, allows only those, and guards each call", async () => {
     const { request } = setup();
+
+    expect(request.options.tools).toEqual(WORKER_BUILT_IN_TOOLS);
+    expect(request.options.strictMcpConfig).toBe(true);
+    expect(Object.keys(request.options.mcpServers ?? {})).toEqual([
+      "superagent",
+    ]);
 
     expect(request.options.allowedTools).toEqual(
       expect.arrayContaining([
@@ -182,6 +192,7 @@ describe("createClaudeSessionStarter", () => {
         "mcp__superagent__read_thread",
         "mcp__superagent__report",
         "mcp__superagent__hand_back",
+        "mcp__superagent__nothing_to_report",
       ]),
     );
     expect(request.options.allowedTools).not.toContain("AskUserQuestion");
@@ -441,6 +452,31 @@ describe("createHandBackTool", () => {
     expect(answer).toEqual({
       content: [{ type: "text", text: "Handed the message back." }],
       isError: false,
+    });
+  });
+});
+
+describe("createNothingToReportTool", () => {
+  it("passes the call on and answers with the outcome", async () => {
+    const nothingToReport = vi.fn((): ToolOutcome => ({
+      isAccepted: false,
+      reply:
+        "Use nothing_to_report only in a turn where you handed a message back.",
+    }));
+    const nothingToReportTool = createNothingToReportTool(nothingToReport);
+
+    const answer = await nothingToReportTool.handler({}, undefined);
+
+    expect(nothingToReportTool.name).toBe("nothing_to_report");
+    expect(nothingToReport).toHaveBeenCalledOnce();
+    expect(answer).toEqual({
+      content: [
+        {
+          type: "text",
+          text: "Use nothing_to_report only in a turn where you handed a message back.",
+        },
+      ],
+      isError: true,
     });
   });
 });

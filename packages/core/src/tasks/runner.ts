@@ -67,6 +67,10 @@ export interface TaskRunner {
 interface LiveSession {
   session: WorkerSession;
   isEnding: boolean;
+  /** Whether the worker handed a message back during the current turn. */
+  hasHandedBackThisTurn: boolean;
+  /** Whether the worker said the current turn has nothing to report. */
+  hasNothingToReport: boolean;
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -117,6 +121,18 @@ export const createTaskRunner = ({
     }
   };
 
+  const restoreReportedState = (taskId: string): boolean => {
+    const latestReport = store.reports.latest(taskId);
+    if (
+      store.tasks.get(taskId)?.state !== "running" ||
+      latestReport === undefined
+    ) {
+      return false;
+    }
+    store.tasks.transition(taskId, latestReport.state);
+    return true;
+  };
+
   const acknowledge = (taskId: string): string => {
     const acknowledgedCount = acknowledgeMessages({ store, taskId });
     if (acknowledgedCount > 0) wakeOutbox();
@@ -129,8 +145,35 @@ export const createTaskRunner = ({
     reason: string,
   ): ToolOutcome => {
     const outcome = handBackMessage({ store, taskId, inputId, reason });
-    if (outcome.isAccepted) wakeRouter();
+    if (!outcome.isAccepted) return outcome;
+    const live = liveSessions.get(taskId);
+    if (live !== undefined) live.hasHandedBackThisTurn = true;
+    wakeRouter();
     return outcome;
+  };
+
+  const nothingToReport = (taskId: string): ToolOutcome => {
+    const live = liveSessions.get(taskId);
+    if (!live?.hasHandedBackThisTurn) {
+      return {
+        isAccepted: false,
+        reply:
+          "Use nothing_to_report only in a turn where you handed a message back. Otherwise report where the task stands.",
+      };
+    }
+    const latestReport = store.reports.latest(taskId);
+    if (latestReport === undefined) {
+      return {
+        isAccepted: false,
+        reply:
+          "This task hasn't reported yet, so there's nothing to go back to. Report where it stands.",
+      };
+    }
+    live.hasNothingToReport = true;
+    return {
+      isAccepted: true,
+      reply: `The task stays ${latestReport.state}, and nothing is posted. End your turn.`,
+    };
   };
 
   const settleReport = (outcome: ToolOutcome): ToolOutcome => {
@@ -147,13 +190,15 @@ export const createTaskRunner = ({
   const postWorkerReport = (
     taskId: string,
     workerReport: WorkerReport,
-  ): ToolOutcome =>
-    settleReport(
+  ): ToolOutcome => {
+    const outcome = settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
         return recordReport({ store, taskId, report: workerReport });
       }),
     );
+    return outcome;
+  };
 
   const deliver = (taskId: string, live: LiveSession): void => {
     const inputs = store.inputs.undelivered(taskId);
@@ -172,12 +217,20 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
+    const { hasNothingToReport } = live;
+    live.hasHandedBackThisTurn = false;
+    live.hasNothingToReport = false;
     if (!turn.isIdle) {
       reopenReportedTask(taskId);
       return;
     }
     if (store.inputs.undelivered(taskId).length > 0) {
       deliver(taskId, live);
+      return;
+    }
+    if (!turn.isError && hasNothingToReport && restoreReportedState(taskId)) {
+      live.isEnding = true;
+      live.session.end();
       return;
     }
     postReport(
@@ -292,13 +345,19 @@ export const createTaskRunner = ({
           readTaskThread({ threads, task: runningTask, ownerUserId }),
         report: (workerReport) => postWorkerReport(task.id, workerReport),
         handBack: (inputId, reason) => handBack(task.id, inputId, reason),
+        nothingToReport: () => nothingToReport(task.id),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live
             : undefined,
         ),
       });
-      live = { session, isEnding: false };
+      live = {
+        session,
+        isEnding: false,
+        hasHandedBackThisTurn: false,
+        hasNothingToReport: false,
+      };
       liveSessions.set(task.id, live);
       logger.info(
         `tasks: ${runningTask.sessionId === null ? "started" : "resumed"} ${task.id} in ${worktree.path}`,

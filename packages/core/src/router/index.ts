@@ -6,6 +6,7 @@ export {
   decideStartTask,
   decideStop,
   type IgnoreDecision,
+  type IgnoreReaction,
   type ReplyDecision,
   type StartTaskDecision,
   type TaskDecision,

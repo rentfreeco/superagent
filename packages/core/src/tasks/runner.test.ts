@@ -168,6 +168,17 @@ const sessionAt = (sessions: readonly FakeSession[], index: number) => {
 const stateOf = (store: Store, taskId: string) =>
   store.tasks.get(taskId)?.state;
 
+const recordOwnerMessage = (store: Store, eventId: string, threadTs: string) =>
+  store.events.record({
+    eventId,
+    type: "message",
+    channel: "C0MAPPED",
+    ts: "100.000009",
+    threadTs,
+    user: "U0OWNER",
+    text: "what's on my calendar?",
+  });
+
 describe("createTaskRunner", () => {
   it("starts a queued task in its own worktree, with its first input, and moves it to running", async () => {
     const {
@@ -545,6 +556,149 @@ describe("createTaskRunner", () => {
     });
     expect(resumed.options.inputs.map(({ id }) => id)).toEqual([followUp?.id]);
     expect(stateOf(store, task.id)).toBe("running");
+  });
+
+  it("puts a task back in its reported state, without a post, when the worker hands a message back and has nothing to report", async () => {
+    const {
+      addInput,
+      createTask,
+      queuedPosts,
+      runner,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
+    await runner.reconcile();
+    const resumed = sessionAt(sessions, 1);
+    const postsBefore = queuedPosts().length;
+
+    resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    const outcome = resumed.options.nothingToReport();
+    resumed.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [offTopic?.id ?? 0], resultText: "Done." }),
+    );
+
+    expect(outcome).toEqual({
+      isAccepted: true,
+      reply: "The task stays done, and nothing is posted. End your turn.",
+    });
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(queuedPosts()).toHaveLength(postsBefore);
+    expect(resumed.end).toHaveBeenCalledOnce();
+  });
+
+  it("refuses nothing_to_report in a turn that handed nothing back", async () => {
+    const { addInput, createTask, runner, sessions, startRunner } = setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    addInput(task.id, "then clear it on deploy");
+    await runner.reconcile();
+
+    expect(sessionAt(sessions, 1).options.nothingToReport()).toEqual({
+      isAccepted: false,
+      reply:
+        "Use nothing_to_report only in a turn where you handed a message back. Otherwise report where the task stands.",
+    });
+  });
+
+  it("refuses nothing_to_report before the task ever reported", async () => {
+    const { addInput, createTask, sessions, startRunner, store } = setup();
+    const task = createTask();
+    addInput(task.id);
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+
+    session.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+
+    expect(session.options.nothingToReport()).toEqual({
+      isAccepted: false,
+      reply:
+        "This task hasn't reported yet, so there's nothing to go back to. Report where it stands.",
+    });
+  });
+
+  it("still waits on the owner when a turn hands a message back but doesn't say it has nothing to report", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    const followUp = addInput(task.id, "then clear it on deploy");
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
+    await runner.reconcile();
+    const resumed = sessionAt(sessions, 1);
+
+    resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    resumed.options.events.onTurnEnd(
+      idleTurn({
+        readInputIds: [followUp?.id ?? 0, offTopic?.id ?? 0],
+        resultText: "Looking at the deploy script.",
+      }),
+    );
+
+    expect(stateOf(store, task.id)).toBe("waiting");
+    expect(store.reports.latest(task.id)?.summary).toBe(
+      "Looking at the deploy script.",
+    );
+  });
+
+  it("forgets a nothing_to_report once its turn ends", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    session.options.report({ state: "done", summary: "It's the cache." });
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
+    await runner.reconcile();
+    session.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    session.options.nothingToReport();
+    session.options.events.onTurnEnd({
+      readInputIds: [assignment?.id ?? 0, offTopic?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+    const followUp = addInput(task.id, "then clear it on deploy");
+    await runner.reconcile();
+
+    session.options.events.onTurnEnd(
+      idleTurn({
+        readInputIds: [followUp?.id ?? 0],
+        resultText: "Looking at the deploy script.",
+      }),
+    );
+
+    expect(stateOf(store, task.id)).toBe("waiting");
   });
 
   it("resumes a task a restart left running, with everything it hadn't read", async () => {

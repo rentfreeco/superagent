@@ -45,6 +45,7 @@ export interface WorkerSessionOptions {
   readThread(): Promise<string>;
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
+  nothingToReport(): ToolOutcome;
   events: WorkerSessionEvents;
 }
 
@@ -69,27 +70,32 @@ export interface ClaudeSessionStarterOptions {
 
 export const WORKER_SERVER_NAME = "superagent";
 
-const WORKER_TOOLS = [
+export const WORKER_BUILT_IN_TOOLS = [
   "Read",
   "Glob",
   "Grep",
   "Edit",
-  "MultiEdit",
   "Write",
   "NotebookEdit",
   "Bash",
-  "BashOutput",
-  "KillShell",
-  "Agent",
   "Task",
-  "TodoWrite",
-  "WebFetch",
   "WebSearch",
   "Skill",
-  ...["ack", "read_thread", "report", "hand_back"].map(
+];
+
+const WORKER_TOOLS = [
+  ...WORKER_BUILT_IN_TOOLS,
+  ...["ack", "read_thread", "report", "hand_back", "nothing_to_report"].map(
     (toolName) => `mcp__${WORKER_SERVER_NAME}__${toolName}`,
   ),
 ];
+
+/**
+ * Set for every worker: Claude Code backgrounds a long command and ends the
+ * turn, and the runner ends an idle session, so a backgrounded build would
+ * never finish. In the foreground it runs to its own timeout of up to ten minutes.
+ */
+const WORKER_FIXED_ENVIRONMENT = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
 
 const WORKER_ENVIRONMENT_NAMES = new Set([
   "PATH",
@@ -242,6 +248,16 @@ export const createHandBackTool = (
     async (args) => toToolResult(handBack(args.message_id, args.reason)),
   );
 
+export const createNothingToReportTool = (
+  nothingToReport: WorkerSessionOptions["nothingToReport"],
+) =>
+  tool(
+    "nothing_to_report",
+    "End this turn without posting anything, leaving the task where it stood. Use it only when this turn handed messages back and nothing else needs an answer.",
+    {},
+    async () => toToolResult(nothingToReport()),
+  );
+
 export const createClaudeSessionStarter =
   ({
     startConversation = query,
@@ -258,6 +274,7 @@ export const createClaudeSessionStarter =
     readThread,
     report,
     handBack,
+    nothingToReport,
     events,
   }) => {
     const gitDirectory = path.join(repo.path, ".git");
@@ -268,8 +285,10 @@ export const createClaudeSessionStarter =
         resume: task.sessionId ?? undefined,
         model: WORKER_MODEL,
         effort: WORKER_EFFORT,
+        tools: WORKER_BUILT_IN_TOOLS,
         permissionMode: "dontAsk",
         allowedTools: WORKER_TOOLS,
+        strictMcpConfig: true,
         hooks: {
           PreToolUse: [
             {
@@ -301,10 +320,11 @@ export const createClaudeSessionStarter =
               createReadThreadTool(readThread),
               createReportTool(report),
               createHandBackTool(handBack),
+              createNothingToReportTool(nothingToReport),
             ],
           }),
         },
-        env: agentEnvironment(environment),
+        env: { ...agentEnvironment(environment), ...WORKER_FIXED_ENVIRONMENT },
         title: task.title,
       },
       prompts: inputs.map(toAgentPrompt),

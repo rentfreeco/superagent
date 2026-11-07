@@ -1,6 +1,7 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ROUTER_IGNORE_REACTIONS } from "../constants.ts";
 import { type ToolOutcome, toToolResult } from "../tasks/tool-outcome.ts";
 import type {
   IgnoreDecision,
@@ -111,11 +112,23 @@ export const createRouterTools = (actions: RouterActions) => ({
   ),
   ignore: tool(
     "ignore",
-    "Leave the candidate unanswered, such as thanks or chat.",
-    { candidate_id: candidateId, reason },
+    "Leave the candidate unanswered, such as thanks or chat, with a reaction on it so the owner sees it was read.",
+    {
+      candidate_id: candidateId,
+      reason,
+      reaction: z
+        .enum(ROUTER_IGNORE_REACTIONS)
+        .describe(
+          "heart for thanks, thumbsup for an acknowledgement, wave for a greeting, white_check_mark for anything else.",
+        ),
+    },
     async (args) =>
       answer(
-        actions.ignore({ candidateId: args.candidate_id, reason: args.reason }),
+        actions.ignore({
+          candidateId: args.candidate_id,
+          reason: args.reason,
+          reaction: args.reaction,
+        }),
       ),
   ),
   list_tasks: tool(

@@ -71,6 +71,7 @@ export const createRouterSessionStarter =
         tools: [],
         permissionMode: "dontAsk",
         allowedTools: ROUTER_TOOL_NAMES,
+        strictMcpConfig: true,
         settingSources: [],
         systemPrompt: routerInstructions({ repos, channelRepos }),
         mcpServers: {
