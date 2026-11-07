@@ -67,8 +67,8 @@ export interface TaskRunner {
 interface LiveSession {
   session: WorkerSession;
   isEnding: boolean;
-  /** Inputs this session's turns read without the worker reporting since. */
-  unansweredInputIds: number[];
+  /** Inputs this session was given since the worker's last accepted report. */
+  deliveredSinceReport: Set<number>;
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -131,6 +131,11 @@ export const createTaskRunner = ({
       );
     });
 
+  const readSinceReport = (live: LiveSession): number[] =>
+    [...live.deliveredSinceReport].filter(
+      (inputId) => store.inputs.get(inputId)?.readAt !== null,
+    );
+
   const restoreReportedState = (taskId: string): boolean => {
     const latestReport = store.reports.latest(taskId);
     if (
@@ -173,13 +178,17 @@ export const createTaskRunner = ({
   const postWorkerReport = (
     taskId: string,
     workerReport: WorkerReport,
-  ): ToolOutcome =>
-    settleReport(
+  ): ToolOutcome => {
+    const outcome = settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
         return recordReport({ store, taskId, report: workerReport });
       }),
     );
+    if (outcome.isAccepted)
+      liveSessions.get(taskId)?.deliveredSinceReport.clear();
+    return outcome;
+  };
 
   const deliver = (taskId: string, live: LiveSession): void => {
     const inputs = store.inputs.undelivered(taskId);
@@ -188,6 +197,7 @@ export const createTaskRunner = ({
       reopenReportedTask(taskId);
       store.inputs.markDelivered(inputs.map(({ id }) => id));
     });
+    for (const { id } of inputs) live.deliveredSinceReport.add(id);
     live.session.send(inputs);
   };
 
@@ -198,10 +208,6 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
-    live.unansweredInputIds =
-      store.tasks.get(taskId)?.state === "running"
-        ? [...live.unansweredInputIds, ...turn.readInputIds]
-        : [];
     if (!turn.isIdle) {
       reopenReportedTask(taskId);
       return;
@@ -212,7 +218,7 @@ export const createTaskRunner = ({
     }
     if (
       !turn.isError &&
-      isAllHandedBack(taskId, live.unansweredInputIds) &&
+      isAllHandedBack(taskId, readSinceReport(live)) &&
       restoreReportedState(taskId)
     ) {
       live.isEnding = true;
@@ -337,7 +343,11 @@ export const createTaskRunner = ({
             : undefined,
         ),
       });
-      live = { session, isEnding: false, unansweredInputIds: [] };
+      live = {
+        session,
+        isEnding: false,
+        deliveredSinceReport: new Set(inputs.map(({ id }) => id)),
+      };
       liveSessions.set(task.id, live);
       logger.info(
         `tasks: ${runningTask.sessionId === null ? "started" : "resumed"} ${task.id} in ${worktree.path}`,

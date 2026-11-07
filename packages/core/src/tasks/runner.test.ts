@@ -593,6 +593,46 @@ describe("createTaskRunner", () => {
     expect(resumed.end).toHaveBeenCalledOnce();
   });
 
+  it("puts a task back when it reported, then got a message it handed back before its turn ended", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    session.options.report({ state: "done", summary: "It's the cache." });
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    store.events.record({
+      eventId: offTopic?.ref ?? "",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000009",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "what's on my calendar?",
+    });
+    await runner.reconcile();
+    const stateAfterDelivery = stateOf(store, task.id);
+
+    session.options.events.onTurnEnd({
+      readInputIds: [assignment?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+    session.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    session.options.events.onTurnEnd(
+      idleTurn({
+        readInputIds: [offTopic?.id ?? 0],
+        resultText: "I handed that back.",
+      }),
+    );
+
+    expect(stateAfterDelivery).toBe("running");
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(store.reports.latest(task.id)?.summary).toBe("It's the cache.");
+  });
+
   it("doesn't put a task back when an earlier turn read a follow-up it never answered", async () => {
     const { addInput, createTask, runner, sessions, startRunner, store } =
       setup();
