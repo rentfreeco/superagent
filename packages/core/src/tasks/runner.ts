@@ -67,6 +67,8 @@ export interface TaskRunner {
 interface LiveSession {
   session: WorkerSession;
   isEnding: boolean;
+  /** Inputs this session's turns read without the worker reporting since. */
+  unansweredInputIds: number[];
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -196,6 +198,10 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
+    live.unansweredInputIds =
+      store.tasks.get(taskId)?.state === "running"
+        ? [...live.unansweredInputIds, ...turn.readInputIds]
+        : [];
     if (!turn.isIdle) {
       reopenReportedTask(taskId);
       return;
@@ -206,7 +212,7 @@ export const createTaskRunner = ({
     }
     if (
       !turn.isError &&
-      isAllHandedBack(taskId, turn.readInputIds) &&
+      isAllHandedBack(taskId, live.unansweredInputIds) &&
       restoreReportedState(taskId)
     ) {
       live.isEnding = true;
@@ -331,7 +337,7 @@ export const createTaskRunner = ({
             : undefined,
         ),
       });
-      live = { session, isEnding: false };
+      live = { session, isEnding: false, unansweredInputIds: [] };
       liveSessions.set(task.id, live);
       logger.info(
         `tasks: ${runningTask.sessionId === null ? "started" : "resumed"} ${task.id} in ${worktree.path}`,

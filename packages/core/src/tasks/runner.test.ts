@@ -593,6 +593,53 @@ describe("createTaskRunner", () => {
     expect(resumed.end).toHaveBeenCalledOnce();
   });
 
+  it("doesn't put a task back when an earlier turn read a follow-up it never answered", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    const followUp = addInput(task.id, "then clear it on deploy");
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    store.events.record({
+      eventId: offTopic?.ref ?? "",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000009",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "what's on my calendar?",
+    });
+    await runner.reconcile();
+    const resumed = sessionAt(sessions, 1);
+
+    resumed.options.events.onTurnEnd({
+      readInputIds: [followUp?.id ?? 0],
+      isError: false,
+      resultText: "Looking at the deploy script.",
+      isIdle: false,
+    });
+    resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    resumed.options.events.onTurnEnd(
+      idleTurn({
+        readInputIds: [offTopic?.id ?? 0],
+        resultText: "I handed that back.",
+      }),
+    );
+
+    expect(stateOf(store, task.id)).toBe("waiting");
+    expect(store.reports.latest(task.id)).toMatchObject({
+      state: "waiting",
+      summary: "I handed that back.",
+    });
+  });
+
   it("still waits on the owner when a turn read something it didn't hand back", async () => {
     const { addInput, createTask, runner, sessions, startRunner, store } =
       setup();
