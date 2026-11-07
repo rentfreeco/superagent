@@ -40,8 +40,13 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 
 Known risks:
 
-- Nothing has run end to end against real Slack and a real Claude Code session yet. Some settings only a real session applies, and three of them could stop every task: the guard's `onFailure: "block"`, the allowlisted names of the `superagent` tools, and the built-in tool names on the allowlist.
-- The router has the same kind of unknowns, any of which could leave every message to the channel-map fallback: the allowlisted `mcp__router__*` tool names, `tools: []` alongside an SDK MCP server, whether it makes exactly one decision per candidate card, and whether it resumes its session after a restart.
+- Real Claude Code sessions ran on 2026-11-07, against a local scratch repo without Slack. Both the worker and the router passed:
+  - the worker: the guard, the tool names, read tracking, follow-ups, and resume after a restart;
+  - the router: one decision per card, and resume after a restart.
+
+  They also found that sessions loaded every built-in tool and the machine's claude.ai connectors, and that `.claude` directories refuse edits. #15 fixes both.
+
+- Nothing has run against real Slack yet: the gate, posts and reactions, finding the bot's own posts by their metadata, thread replies, `stop`, DMs, and catch-up after a restart.
 - Claude Code keeps session transcripts under `~/.claude`. In a container they must live on the volume, or resuming a task breaks after a restart.
 - Pull requests open as your own GitHub account, and GitHub does not let you approve your own PR.
 - The worker's summary posts as it wrote it. The length limit is an instruction, not enforced.
@@ -67,11 +72,7 @@ Left:
   - a restart mid-task;
   - a DM.
 
-  It settles what tests can't:
-  - that the session starts with the guard's `onFailure: "block"`;
-  - that the allowlisted tool names, the `superagent` tools and the built-in ones, are what Claude Code checks;
-  - that the bot finds its own earlier posts by their metadata;
-  - that turn results list the prompts they read (`user_message_uuids`).
+  The session-only questions are settled by the live session runs: the guard's `onFailure: "block"` starts, the tool names match what Claude Code checks (#15 removed six it doesn't have), and turn results list the prompts they read. Still open, and Slack-only: that the bot finds its own earlier posts by their metadata.
 
   Before running it, run `pnpm install`, and paste the manifest again and reinstall the Slack app for the new scopes and events.
 
