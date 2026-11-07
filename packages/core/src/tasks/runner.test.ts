@@ -547,6 +547,74 @@ describe("createTaskRunner", () => {
     expect(stateOf(store, task.id)).toBe("running");
   });
 
+  it("puts a task back in its reported state, without a post, when a turn only handed messages back", async () => {
+    const {
+      addInput,
+      createTask,
+      queuedPosts,
+      runner,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    const offTopic = addInput(task.id, "what's on my calendar?");
+    store.events.record({
+      eventId: offTopic?.ref ?? "",
+      type: "message",
+      channel: "C0MAPPED",
+      ts: "100.000009",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "what's on my calendar?",
+    });
+    await runner.reconcile();
+    const resumed = sessionAt(sessions, 1);
+    const postsBefore = queuedPosts().length;
+
+    resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
+    resumed.options.events.onTurnEnd(
+      idleTurn({
+        readInputIds: [offTopic?.id ?? 0],
+        resultText: "I handed that back.",
+      }),
+    );
+
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(queuedPosts()).toHaveLength(postsBefore);
+    expect(resumed.end).toHaveBeenCalledOnce();
+  });
+
+  it("still waits on the owner when a turn read something it didn't hand back", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    const assignment = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [assignment?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    const followUp = addInput(task.id, "then clear it on deploy");
+    await runner.reconcile();
+
+    sessionAt(sessions, 1).options.events.onTurnEnd(
+      idleTurn({ readInputIds: [followUp?.id ?? 0], resultText: "Thinking." }),
+    );
+
+    expect(stateOf(store, task.id)).toBe("waiting");
+  });
+
   it("resumes a task a restart left running, with everything it hadn't read", async () => {
     const { addInput, createTask, sessions, startRunner, store } = setup();
     const task = createTask("running");

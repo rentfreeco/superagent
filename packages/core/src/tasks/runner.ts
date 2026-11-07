@@ -117,6 +117,30 @@ export const createTaskRunner = ({
     }
   };
 
+  const isAllHandedBack = (
+    taskId: string,
+    readInputIds: readonly number[],
+  ): boolean =>
+    readInputIds.length > 0 &&
+    readInputIds.every((inputId) => {
+      const ref = store.inputs.get(inputId)?.ref;
+      return (
+        typeof ref === "string" && store.candidates.isHandedBack(ref, taskId)
+      );
+    });
+
+  const restoreReportedState = (taskId: string): boolean => {
+    const latestReport = store.reports.latest(taskId);
+    if (
+      store.tasks.get(taskId)?.state !== "running" ||
+      latestReport === undefined
+    ) {
+      return false;
+    }
+    store.tasks.transition(taskId, latestReport.state);
+    return true;
+  };
+
   const acknowledge = (taskId: string): string => {
     const acknowledgedCount = acknowledgeMessages({ store, taskId });
     if (acknowledgedCount > 0) wakeOutbox();
@@ -178,6 +202,15 @@ export const createTaskRunner = ({
     }
     if (store.inputs.undelivered(taskId).length > 0) {
       deliver(taskId, live);
+      return;
+    }
+    if (
+      !turn.isError &&
+      isAllHandedBack(taskId, turn.readInputIds) &&
+      restoreReportedState(taskId)
+    ) {
+      live.isEnding = true;
+      live.session.end();
       return;
     }
     postReport(
