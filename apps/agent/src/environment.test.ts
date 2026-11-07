@@ -48,15 +48,32 @@ describe("parseEnvironment", () => {
         .dataDirectory,
     ).toBe("/data");
     expect(
-      parseEnvironment({ ...slackVariables, SUPERAGENT_DATA_DIR: "state" })
-        .dataDirectory,
-    ).toBe(path.resolve("state"));
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_DATA_DIR: path.relative(process.cwd(), "/srv/superagent"),
+      }).dataDirectory,
+    ).toBe("/srv/superagent");
   });
 
   it("rejects an empty SUPERAGENT_DATA_DIR instead of guessing", () => {
     expect(() =>
       parseEnvironment({ ...slackVariables, SUPERAGENT_DATA_DIR: "" }),
     ).toThrow(/must be a directory path/);
+  });
+
+  it("rejects a SUPERAGENT_DATA_DIR inside a .claude directory, where workers can't edit files", () => {
+    expect(() =>
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_DATA_DIR: "/Users/owner/.claude/superagent",
+      }),
+    ).toThrow(/must not be inside a \.claude directory/);
+    expect(
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_DATA_DIR: "/Users/owner/.claude-notes/superagent",
+      }).dataDirectory,
+    ).toBe("/Users/owner/.claude-notes/superagent");
   });
 
   it("takes the log level from LOG_LEVEL", () => {

@@ -14,6 +14,7 @@ import {
   createHandBackTool,
   createReadThreadTool,
   createReportTool,
+  WORKER_BUILT_IN_TOOLS,
   WORKER_SERVER_NAME,
 } from "./claude-session.ts";
 import type { WorkerReport } from "./record-report.ts";
@@ -170,8 +171,14 @@ describe("createClaudeSessionStarter", () => {
     ]);
   });
 
-  it("allows only its working tools, including the superagent ones, and guards each call", async () => {
+  it("loads only its working tools and its own MCP server, allows only those, and guards each call", async () => {
     const { request } = setup();
+
+    expect(request.options.tools).toEqual(WORKER_BUILT_IN_TOOLS);
+    expect(request.options.strictMcpConfig).toBe(true);
+    expect(Object.keys(request.options.mcpServers ?? {})).toEqual([
+      "superagent",
+    ]);
 
     expect(request.options.allowedTools).toEqual(
       expect.arrayContaining([

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { LogLevel } from "@repo/core/slack";
 import { z } from "zod";
+import { CLAUDE_DIRECTORY_NAME } from "./constants.ts";
 
 export interface Environment {
   slackBotToken: string;
@@ -35,6 +36,14 @@ const environmentSchema = z.object({
   SUPERAGENT_DATA_DIR: z
     .string()
     .min(1, "must be a directory path; leave it unset to use ~/.superagent")
+    .refine(
+      (directory) =>
+        !path
+          .resolve(directory)
+          .split(path.sep)
+          .includes(CLAUDE_DIRECTORY_NAME),
+      `must not be inside a ${CLAUDE_DIRECTORY_NAME} directory: Claude Code refuses workers' file edits there, so every task would end blocked`,
+    )
     .default(path.join(homedir(), ".superagent")),
   SUPERAGENT_ROUTER: z
     .enum(["on", "off"], { error: "must be on or off" })

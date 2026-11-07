@@ -78,6 +78,7 @@ it("starts the router with only its routing tools, no settings files, its instru
     tools: [],
     permissionMode: "dontAsk",
     allowedTools: ROUTER_TOOL_NAMES,
+    strictMcpConfig: true,
     settingSources: [],
     systemPrompt: expect.stringContaining(
       "- superagent (pakgin/superagent): The Slack coding agent itself. Channels: C0MAPPED.",

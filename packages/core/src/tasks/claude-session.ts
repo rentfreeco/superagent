@@ -69,23 +69,21 @@ export interface ClaudeSessionStarterOptions {
 
 export const WORKER_SERVER_NAME = "superagent";
 
-const WORKER_TOOLS = [
+export const WORKER_BUILT_IN_TOOLS = [
   "Read",
   "Glob",
   "Grep",
   "Edit",
-  "MultiEdit",
   "Write",
   "NotebookEdit",
   "Bash",
-  "BashOutput",
-  "KillShell",
-  "Agent",
   "Task",
-  "TodoWrite",
-  "WebFetch",
   "WebSearch",
   "Skill",
+];
+
+const WORKER_TOOLS = [
+  ...WORKER_BUILT_IN_TOOLS,
   ...["ack", "read_thread", "report", "hand_back"].map(
     (toolName) => `mcp__${WORKER_SERVER_NAME}__${toolName}`,
   ),
@@ -268,8 +266,10 @@ export const createClaudeSessionStarter =
         resume: task.sessionId ?? undefined,
         model: WORKER_MODEL,
         effort: WORKER_EFFORT,
+        tools: WORKER_BUILT_IN_TOOLS,
         permissionMode: "dontAsk",
         allowedTools: WORKER_TOOLS,
+        strictMcpConfig: true,
         hooks: {
           PreToolUse: [
             {
