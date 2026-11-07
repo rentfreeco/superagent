@@ -67,8 +67,10 @@ export interface TaskRunner {
 interface LiveSession {
   session: WorkerSession;
   isEnding: boolean;
-  /** Inputs this session was given since the worker's last accepted report. */
-  deliveredSinceReport: Set<number>;
+  /** Whether the worker made an accepted report during the current turn. */
+  hasReportedThisTurn: boolean;
+  /** Inputs read, and not handed back, in turns since the last one that reported. */
+  unansweredInputIds: number[];
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -119,22 +121,12 @@ export const createTaskRunner = ({
     }
   };
 
-  const isAllHandedBack = (
-    taskId: string,
-    readInputIds: readonly number[],
-  ): boolean =>
-    readInputIds.length > 0 &&
-    readInputIds.every((inputId) => {
-      const ref = store.inputs.get(inputId)?.ref;
-      return (
-        typeof ref === "string" && store.candidates.isHandedBack(ref, taskId)
-      );
-    });
-
-  const readSinceReport = (live: LiveSession): number[] =>
-    [...live.deliveredSinceReport].filter(
-      (inputId) => store.inputs.get(inputId)?.readAt !== null,
+  const isHandedBackInput = (taskId: string, inputId: number): boolean => {
+    const ref = store.inputs.get(inputId)?.ref;
+    return (
+      typeof ref === "string" && store.candidates.isHandedBack(ref, taskId)
     );
+  };
 
   const restoreReportedState = (taskId: string): boolean => {
     const latestReport = store.reports.latest(taskId);
@@ -185,8 +177,9 @@ export const createTaskRunner = ({
         return recordReport({ store, taskId, report: workerReport });
       }),
     );
-    if (outcome.isAccepted)
-      liveSessions.get(taskId)?.deliveredSinceReport.clear();
+    const live = liveSessions.get(taskId);
+    if (outcome.isAccepted && live !== undefined)
+      live.hasReportedThisTurn = true;
     return outcome;
   };
 
@@ -197,7 +190,6 @@ export const createTaskRunner = ({
       reopenReportedTask(taskId);
       store.inputs.markDelivered(inputs.map(({ id }) => id));
     });
-    for (const { id } of inputs) live.deliveredSinceReport.add(id);
     live.session.send(inputs);
   };
 
@@ -208,6 +200,15 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
+    live.unansweredInputIds = live.hasReportedThisTurn
+      ? []
+      : [
+          ...live.unansweredInputIds,
+          ...turn.readInputIds.filter(
+            (inputId) => !isHandedBackInput(taskId, inputId),
+          ),
+        ];
+    live.hasReportedThisTurn = false;
     if (!turn.isIdle) {
       reopenReportedTask(taskId);
       return;
@@ -218,7 +219,8 @@ export const createTaskRunner = ({
     }
     if (
       !turn.isError &&
-      isAllHandedBack(taskId, readSinceReport(live)) &&
+      live.unansweredInputIds.length === 0 &&
+      turn.readInputIds.some((inputId) => isHandedBackInput(taskId, inputId)) &&
       restoreReportedState(taskId)
     ) {
       live.isEnding = true;
@@ -346,7 +348,8 @@ export const createTaskRunner = ({
       live = {
         session,
         isEnding: false,
-        deliveredSinceReport: new Set(inputs.map(({ id }) => id)),
+        hasReportedThisTurn: false,
+        unansweredInputIds: [],
       };
       liveSessions.set(task.id, live);
       logger.info(
