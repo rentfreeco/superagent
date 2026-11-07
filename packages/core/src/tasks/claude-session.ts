@@ -89,6 +89,13 @@ const WORKER_TOOLS = [
   ),
 ];
 
+/**
+ * Set for every worker: Claude Code backgrounds a long command and ends the
+ * turn, and the runner ends an idle session, so a backgrounded build would
+ * never finish. In the foreground it runs to its own timeout of up to ten minutes.
+ */
+const WORKER_FIXED_ENVIRONMENT = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
+
 const WORKER_ENVIRONMENT_NAMES = new Set([
   "PATH",
   "HOME",
@@ -304,7 +311,7 @@ export const createClaudeSessionStarter =
             ],
           }),
         },
-        env: agentEnvironment(environment),
+        env: { ...agentEnvironment(environment), ...WORKER_FIXED_ENVIRONMENT },
         title: task.title,
       },
       prompts: inputs.map(toAgentPrompt),

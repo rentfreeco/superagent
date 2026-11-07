@@ -161,6 +161,7 @@ describe("createClaudeSessionStarter", () => {
       LC_ALL: "en_US.UTF-8",
       ANTHROPIC_API_KEY: "sk-ant-test",
       GH_TOKEN: "ghp_test",
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     });
     expect(request.options).not.toHaveProperty(
       "allowDangerouslySkipPermissions",
