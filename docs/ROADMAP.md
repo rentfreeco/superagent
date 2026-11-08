@@ -133,6 +133,7 @@ A stranger's comment being ignored needs a third GitHub account, so only the uni
   - CI and bots never wake a failed or stopped task. The owner's comments do, as their Slack replies do.
 - **A merge or a close** posts once in the Slack thread, ends any live session, and moves the task to done from any state. A later reply still resumes it.
 - **Review instructions:** fix and resolve quietly, decline with one sentence on the comment, push, report ready again, and never merge.
+- **Edits count:** a comment edited after it was read reaches the worker again, as an edit, such as Greptile's summary, which it rewrites in place after each review.
 - **Answer where it was asked:** 👀 on a GitHub comment the worker starts on, 👍 once its turn ends (✅ in Slack), and the report on `[github]` messages posted as a pull request comment, not in Slack. The runner picks where a report goes from the messages it answers, and the outbox makes the GitHub writes, so they are durable, ordered, and posted once.
 - **Done when:**
   - a failing CI run is fixed without anyone writing in Slack;

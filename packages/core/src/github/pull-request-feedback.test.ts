@@ -43,10 +43,12 @@ const comment = (
   id: number,
   user: typeof owner,
   body = "please rename it",
+  updatedAt = "2026-11-07T09:00:00Z",
 ) => ({
   id,
   user,
   body,
+  updated_at: updatedAt,
   html_url: `https://github.com/pakgin/scratch/pull/7#issuecomment-${id}`,
 });
 
@@ -109,6 +111,7 @@ describe("pullRequestFeedback", () => {
             body: "Use a clearer name here.",
             path: "src/math.js",
             line: 3,
+            updated_at: "2026-11-07T09:00:00Z",
             html_url: "https://github.com/pakgin/scratch/pull/7#discussion_r21",
           },
         ],
@@ -184,7 +187,11 @@ describe("pullRequestFeedback", () => {
 
   it("reads nothing it has already seen, nor empty or pending reviews", () => {
     const result = feedback({
-      position: { ...UNREAD_POSITION, lastCommentId: 31 },
+      position: {
+        ...UNREAD_POSITION,
+        lastCommentId: 31,
+        lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+      },
       discussion: {
         ...emptyDiscussion(),
         reviews: [
@@ -196,6 +203,100 @@ describe("pullRequestFeedback", () => {
     });
 
     expect(result.inputs).toEqual([]);
+  });
+
+  it("passes an edit of a comment it has seen on, once per edit, and counts a bot's edit as a round", () => {
+    const discussion: PullRequestDiscussion = {
+      ...emptyDiscussion(),
+      reviewComments: [
+        {
+          id: 21,
+          user: owner,
+          body: "Use a clearer name, and add a test.",
+          path: "src/math.js",
+          line: 3,
+          updated_at: "2026-11-07T09:20:00Z",
+          html_url: "https://github.com/pakgin/scratch/pull/7#discussion_r21",
+        },
+      ],
+      comments: [
+        comment(31, reviewer, "Confidence 5/5", "2026-11-07T09:30:00Z"),
+        comment(32, agent, "Fixed it.", "2026-11-07T09:40:00Z"),
+      ],
+    };
+    const position = {
+      ...UNREAD_POSITION,
+      lastReviewCommentId: 21,
+      lastCommentId: 32,
+      lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+    };
+
+    const result = feedback({ discussion, position });
+    const again = feedback({ discussion, position: result.position });
+
+    expect(result.inputs).toEqual([
+      {
+        ref: "github:review-comment:21:edited:2026-11-07T09:20:00Z",
+        text: "The owner edited a comment on src/math.js line 3 in pull request #7 (review comment 21): Use a clearer name, and add a test.\nhttps://github.com/pakgin/scratch/pull/7#discussion_r21",
+      },
+      {
+        ref: "github:comment:31:edited:2026-11-07T09:30:00Z",
+        text: "greptile-apps[bot], an automated reviewer, edited a comment on pull request #7: Confidence 5/5\nhttps://github.com/pakgin/scratch/pull/7#issuecomment-31",
+      },
+    ]);
+    expect(result.position).toMatchObject({
+      lastCommentUpdatedAt: "2026-11-07T09:40:00Z",
+      botRounds: 1,
+    });
+    expect(again.inputs).toEqual([]);
+  });
+
+  it("doesn't take a comment written while it read for an edit on the next poll", () => {
+    const comments = [
+      comment(31, owner, "please rename it", "2026-11-07T09:00:00Z"),
+      comment(32, owner, "and add a test", "2026-11-07T10:00:05Z"),
+    ];
+    const first = feedback({
+      discussion: { ...emptyDiscussion(), comments },
+      position: {
+        ...UNREAD_POSITION,
+        updatedAt: "2026-11-07T09:00:00Z",
+        lastCommentId: 31,
+        lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+      },
+    });
+
+    const next = feedback({
+      pull: pullRequest({ updated_at: "2026-11-07T10:00:05Z" }),
+      discussion: { ...emptyDiscussion(), comments },
+      position: first.position,
+    });
+
+    expect(first.inputs.map(({ ref }) => ref)).toEqual(["github:comment:32"]);
+    expect(next.inputs).toEqual([]);
+  });
+
+  it("takes a position saved before edits were tracked as read up to its updatedAt", () => {
+    const { lastCommentUpdatedAt: _untracked, ...savedBefore } = {
+      ...UNREAD_POSITION,
+      updatedAt: "2026-11-07T10:00:00Z",
+      lastCommentId: 31,
+    };
+
+    const result = feedback({
+      discussion: {
+        ...emptyDiscussion(),
+        comments: [
+          comment(30, owner, "an edit it read before", "2026-11-07T09:59:00Z"),
+          comment(31, owner, "an edit since", "2026-11-07T10:05:00Z"),
+        ],
+      },
+      position: savedBefore,
+    });
+
+    expect(result.inputs.map(({ ref }) => ref)).toEqual([
+      "github:comment:31:edited:2026-11-07T10:05:00Z",
+    ]);
   });
 
   it("leaves a pull request alone that isn't on the task's branch, or comes from a fork, and says so once", () => {

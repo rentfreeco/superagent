@@ -32,6 +32,7 @@ const reviewCommentSchema = z.object({
   body: z.string(),
   path: z.string(),
   line: z.number().nullable(),
+  updated_at: z.string(),
   html_url: z.string(),
 });
 
@@ -39,6 +40,7 @@ const issueCommentSchema = z.object({
   id: z.number(),
   user: authorSchema.nullable(),
   body: z.string().nullable(),
+  updated_at: z.string(),
   html_url: z.string(),
 });
 

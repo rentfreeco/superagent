@@ -16,6 +16,8 @@ export const pullRequestPositionSchema = z.object({
   lastReviewId: z.number(),
   lastReviewCommentId: z.number(),
   lastCommentId: z.number(),
+  /** The newest updated_at among the comments read; a comment already seen and updated after it was edited. Positions saved before it fall back to updatedAt. */
+  lastCommentUpdatedAt: z.string().optional(),
   seenCheckRunIds: z.array(z.number()),
   botRounds: z.number(),
 });
@@ -64,6 +66,10 @@ interface Item {
   user: ItemAuthor | null;
 }
 
+interface EditableItem extends Item {
+  updated_at: string;
+}
+
 const FAILED_CONCLUSIONS = new Set([
   "failure",
   "timed_out",
@@ -86,6 +92,7 @@ export const UNREAD_POSITION: PullRequestPosition = {
   lastReviewId: 0,
   lastReviewCommentId: 0,
   lastCommentId: 0,
+  lastCommentUpdatedAt: "",
   seenCheckRunIds: [],
   botRounds: 0,
 };
@@ -96,6 +103,12 @@ const isTaskBranch = ({ head, base }: PullRequest, taskId: string) =>
 
 const lastId = (items: readonly Item[], previous: number) =>
   Math.max(previous, ...items.map(({ id }) => id));
+
+const lastUpdatedAt = (items: readonly EditableItem[], previous: string) =>
+  items.reduce(
+    (latest, { updated_at }) => (updated_at > latest ? updated_at : latest),
+    previous,
+  );
 
 /**
  * What a poll of a task's pull request means: the inputs that wake its
@@ -170,6 +183,24 @@ export const pullRequestFeedback = ({
     }
   };
 
+  const editsAfter = seen.lastCommentUpdatedAt ?? seen.updatedAt;
+  /** A new comment, an edit of one already seen, or undefined for neither. */
+  const commentChange = (
+    comment: EditableItem,
+    kind: "comment" | "review-comment",
+    lastSeenId: number,
+  ) => {
+    if (comment.id > lastSeenId) {
+      return { verb: "commented", ref: `github:${kind}:${comment.id}` };
+    }
+    return comment.updated_at > editsAfter
+      ? {
+          verb: "edited a comment",
+          ref: `github:${kind}:${comment.id}:edited:${comment.updated_at}`,
+        }
+      : undefined;
+  };
+
   if (discussion !== undefined) {
     for (const review of discussion.reviews) {
       const text = review.body?.trim() ?? "";
@@ -188,7 +219,12 @@ export const pullRequestFeedback = ({
       );
     }
     for (const comment of discussion.reviewComments) {
-      if (comment.id <= seen.lastReviewCommentId) continue;
+      const change = commentChange(
+        comment,
+        "review-comment",
+        seen.lastReviewCommentId,
+      );
+      if (change === undefined) continue;
       const where =
         comment.line === null
           ? comment.path
@@ -196,18 +232,19 @@ export const pullRequestFeedback = ({
       take(
         comment,
         (who) =>
-          `${who} commented on ${where} in pull request #${number} (review comment ${comment.id}): ${body(comment.body)}\n${comment.html_url}`,
-        `github:review-comment:${comment.id}`,
+          `${who} ${change.verb} on ${where} in pull request #${number} (review comment ${comment.id}): ${body(comment.body)}\n${comment.html_url}`,
+        change.ref,
       );
     }
     for (const comment of discussion.comments) {
       const text = comment.body?.trim() ?? "";
-      if (comment.id <= seen.lastCommentId || !text) continue;
+      const change = commentChange(comment, "comment", seen.lastCommentId);
+      if (change === undefined || !text) continue;
       take(
         comment,
         (who) =>
-          `${who} commented on pull request #${number}: ${body(text)}\n${comment.html_url}`,
-        `github:comment:${comment.id}`,
+          `${who} ${change.verb} on pull request #${number}: ${body(text)}\n${comment.html_url}`,
+        change.ref,
       );
     }
   }
@@ -249,6 +286,13 @@ export const pullRequestFeedback = ({
         seen.lastReviewCommentId,
       ),
       lastCommentId: lastId(discussion?.comments ?? [], seen.lastCommentId),
+      lastCommentUpdatedAt:
+        discussion === undefined
+          ? seen.lastCommentUpdatedAt
+          : lastUpdatedAt(
+              [...discussion.reviewComments, ...discussion.comments],
+              editsAfter,
+            ),
       seenCheckRunIds:
         checkRuns === undefined ? seen.seenCheckRunIds : seenCheckRunIds,
       botRounds: seen.botRounds + (hasBotInput ? 1 : 0),

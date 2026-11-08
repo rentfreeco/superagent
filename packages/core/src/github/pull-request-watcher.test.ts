@@ -137,6 +137,7 @@ describe("createPullRequestWatcher", () => {
         id: 31,
         user: owner,
         body: "Rename add to sum.",
+        updated_at: "2026-11-07T09:00:00Z",
         html_url: "https://github.com/pakgin/scratch/pull/7#issuecomment-31",
       },
     ]);
