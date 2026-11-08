@@ -402,6 +402,7 @@ describe("createTaskRunner", () => {
     });
     await startRunner(1);
 
+    expect(sessionAt(sessions, 0).options.pullRequestNumber()).toBe(7);
     expect(await sessionAt(sessions, 0).options.ack()).toBe(
       "Put 👀 on the message.",
     );

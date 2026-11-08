@@ -10,6 +10,8 @@ export interface WorkerGuardOptions {
   gitDirectory: string;
   baseBranch: string;
   homeDirectory: string;
+  /** The task's pull request, once it has one: the worker answers there only through its report. */
+  pullRequestNumber?: () => number | undefined;
 }
 
 const CREDENTIAL_DIRECTORIES = [
@@ -28,7 +30,14 @@ const FILE_WRITING_TOOLS = new Set([
   "NotebookEdit",
 ]);
 const SEARCH_TOOLS = new Set(["Grep", "Glob"]);
-const GH_OPTIONS_WITH_VALUES = new Set(["-R", "--repo"]);
+const GH_OPTIONS_WITH_VALUES = new Set([
+  "-R",
+  "--repo",
+  "-b",
+  "--body",
+  "-F",
+  "--body-file",
+]);
 const GIT_OPTIONS_WITH_VALUES = new Set([
   "-C",
   "-c",
@@ -52,6 +61,10 @@ const DELETE_REFUSAL =
 const FORCE_PUSH_REFUSAL =
   "Force pushes are refused. Use --force-with-lease on your own branch if you must rewrite it.";
 const DELETE_BRANCH_REFUSAL = "Deleting remote branches is refused.";
+const COMMENT_REFUSAL =
+  "Your report is your answer on the pull request: it's posted there for [github] messages, so a comment of your own would say it twice. Reply only in a review comment's thread, then report.";
+const GH_API_FIELD_OPTION =
+  /^(?:-[fF]|--field|--raw-field|--input)(?:=|$)|^-[fF]\S/;
 const READ_REFUSAL = "Reading credential files is refused.";
 const SEARCH_REFUSAL =
   "Searching a directory that holds credential files is refused. Search inside your worktree.";
@@ -105,14 +118,48 @@ const GH_API_REFUSALS: readonly (readonly [RegExp, string])[] = [
   ],
 ];
 
-const ghApiRefusal = (args: readonly string[]): string | undefined => {
+/** gh api sends fields, an input file, or a method other than GET. */
+const isGhApiWrite = (args: readonly string[]): boolean =>
+  args.some((arg, index) => {
+    if (GH_API_FIELD_OPTION.test(arg)) return true;
+    const [, method] = arg.match(/^(?:-X|--method)=?(.*)$/) ?? [];
+    if (method === undefined) return false;
+    return (method || args[index + 1] || "").toUpperCase() !== "GET";
+  });
+
+const ghApiRefusal = (
+  args: readonly string[],
+  pullRequestNumber: number | undefined,
+): string | undefined => {
   const request = args.join(" ");
+  if (
+    pullRequestNumber !== undefined &&
+    request.includes(`/issues/${pullRequestNumber}/comments`) &&
+    isGhApiWrite(args)
+  ) {
+    return COMMENT_REFUSAL;
+  }
   return GH_API_REFUSALS.find(([pattern]) => pattern.test(request))?.[1];
 };
 
-const ghRefusal = (args: readonly string[]): string | undefined => {
-  const [group, action] = positionals(args, GH_OPTIONS_WITH_VALUES);
-  if (group === "api") return ghApiRefusal(args);
+/** A gh pr or issue selector naming the task's pull request; none means the current branch's. */
+const isTaskPullRequest = (
+  group: string | undefined,
+  selector: string | undefined,
+  pullRequestNumber: number,
+): boolean =>
+  selector === undefined
+    ? group === "pr"
+    : selector === String(pullRequestNumber) ||
+      selector === `#${pullRequestNumber}` ||
+      selector.endsWith(`/pull/${pullRequestNumber}`);
+
+const ghRefusal = (
+  args: readonly string[],
+  pullRequestNumber: number | undefined,
+): string | undefined => {
+  const [group, action, selector] = positionals(args, GH_OPTIONS_WITH_VALUES);
+  if (group === "api") return ghApiRefusal(args, pullRequestNumber);
   if (group === "pr" && action === "merge") return MERGE_REFUSAL;
   if (
     group === "pr" &&
@@ -124,6 +171,16 @@ const ghRefusal = (args: readonly string[]): string | undefined => {
   if (group === "issue" && action === "close") return CLOSE_REFUSAL;
   if ((group === "repo" || group === "release") && action === "delete") {
     return DELETE_REFUSAL;
+  }
+  const isComment =
+    (group === "pr" && (action === "comment" || action === "review")) ||
+    (group === "issue" && action === "comment");
+  if (
+    isComment &&
+    pullRequestNumber !== undefined &&
+    isTaskPullRequest(group, selector, pullRequestNumber)
+  ) {
+    return COMMENT_REFUSAL;
   }
   return undefined;
 };
@@ -170,8 +227,9 @@ const gitRefusal = (
 
 const commandRefusal = (
   command: string,
-  baseBranch: string,
+  { baseBranch, pullRequestNumber }: WorkerGuardOptions,
 ): string | undefined => {
+  const taskPullRequestNumber = pullRequestNumber?.();
   // Any word of a command can start the gh or git it runs, after a keyword
   // (if, do, !), a wrapper and its options (env -i, sudo -u bot, xargs), or a
   // VAR=value prefix, so every position is checked. An unquoted mention, such
@@ -182,7 +240,7 @@ const commandRefusal = (
       const args = words.slice(index + 1);
       const refusal =
         program === "gh"
-          ? ghRefusal(args)
+          ? ghRefusal(args, taskPullRequestNumber)
           : program === "git"
             ? gitRefusal(args, baseBranch)
             : undefined;
@@ -275,7 +333,7 @@ export const refusalFor = async (
   if (toolName === "Bash") {
     const command = commandInputSchema.safeParse(toolInput);
     return command.success
-      ? commandRefusal(command.data.command, options.baseBranch)
+      ? commandRefusal(command.data.command, options)
       : undefined;
   }
   const files = fileInputSchema.safeParse(toolInput);

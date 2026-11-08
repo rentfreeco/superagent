@@ -418,6 +418,8 @@ export const createTaskRunner = ({
         report: (workerReport) => postWorkerReport(task.id, workerReport),
         handBack: (inputId, reason) => handBack(task.id, inputId, reason),
         nothingToReport: () => nothingToReport(task.id),
+        pullRequestNumber: () =>
+          store.tasks.get(task.id)?.prNumber ?? undefined,
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live

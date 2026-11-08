@@ -124,6 +124,7 @@ const setup = ({
     }),
     handBack: () => ({ isAccepted: true, reply: "Handed back." }),
     nothingToReport: () => ({ isAccepted: true, reply: "Nothing posted." }),
+    pullRequestNumber: () => 6,
     events,
   });
   const [request] = requests;
@@ -216,7 +217,23 @@ describe("createClaudeSessionStarter", () => {
       "toolu_1",
       { signal: new AbortController().signal },
     );
+    const commentDecision = await guard?.(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s-1",
+        transcript_path: "/tmp/transcript.jsonl",
+        cwd: "/data/worktrees/abcd2345",
+        tool_name: "Bash",
+        tool_input: { command: 'gh pr comment 6 --body "Done."' },
+        tool_use_id: "toolu_2",
+      },
+      "toolu_2",
+      { signal: new AbortController().signal },
+    );
     expect(decision).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    });
+    expect(commentDecision).toMatchObject({
       hookSpecificOutput: { permissionDecision: "deny" },
     });
   });

@@ -48,6 +48,8 @@ export interface WorkerSessionOptions {
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
   nothingToReport(): ToolOutcome;
+  /** The task's pull request number, once it has one. */
+  pullRequestNumber(): number | undefined;
   events: WorkerSessionEvents;
 }
 
@@ -280,6 +282,7 @@ export const createClaudeSessionStarter =
     report,
     handBack,
     nothingToReport,
+    pullRequestNumber,
     events,
   }) => {
     const gitDirectory = path.join(repo.path, ".git");
@@ -303,6 +306,7 @@ export const createClaudeSessionStarter =
                   gitDirectory,
                   baseBranch: repo.baseBranch,
                   homeDirectory,
+                  pullRequestNumber,
                 }),
               ],
               onFailure: "block",

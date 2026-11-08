@@ -118,6 +118,42 @@ describe("refusalFor commands", () => {
   });
 });
 
+describe("refusalFor comments on the task's pull request", () => {
+  const withPullRequest: WorkerGuardOptions = {
+    ...options,
+    pullRequestNumber: () => 6,
+  };
+  const bashOnTask = (command: string) =>
+    refusalFor("Bash", { command }, withPullRequest);
+
+  it.each([
+    'gh pr comment 6 --body "Done."',
+    "gh pr comment --body-file reply.md",
+    "gh pr comment https://github.com/pakgin/scratch/pull/6 -b Done.",
+    "gh issue comment 6 -b Done.",
+    "gh pr review 6 --comment -b 'Looks fine.'",
+    "gh api repos/pakgin/scratch/issues/6/comments -f body=Done.",
+    "gh api --method POST repos/pakgin/scratch/issues/6/comments --input reply.json",
+  ])("refuses `%s`, since the report is posted there", async (command) => {
+    expect(await bashOnTask(command)).toContain("Your report is your answer");
+  });
+
+  it.each([
+    "gh pr comment 3 --body 'Linked from the other pull request.'",
+    "gh issue comment 12 -b 'Fixed in #6.'",
+    "gh api repos/pakgin/scratch/issues/6/comments",
+    "gh api --paginate repos/pakgin/scratch/issues/6/comments --jq '.[].body'",
+    "gh api repos/pakgin/scratch/pulls/6/comments/21/replies -f body='Renamed it.'",
+    "gh pr view 6 --comments",
+  ])("allows `%s`", async (command) => {
+    expect(await bashOnTask(command)).toBeUndefined();
+  });
+
+  it("allows commenting before the task has a pull request", async () => {
+    expect(await bash('gh pr comment --body "Opened."')).toBeUndefined();
+  });
+});
+
 describe("refusalFor files", () => {
   it("refuses writes outside the worktree and its git directory", async () => {
     expect(
