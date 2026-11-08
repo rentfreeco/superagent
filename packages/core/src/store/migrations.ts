@@ -134,6 +134,37 @@ export const MIGRATIONS: readonly string[] = [
   );
   create unique index decisions_once on decisions (candidate_id);
   `,
+  `
+  create table outbox_rebuilt (
+    id integer primary key,
+    dedupe_key text not null unique,
+    channel text not null,
+    thread_ts text,
+    kind text not null check (kind in (
+      'post', 'reaction', 'reaction_removal',
+      'github_comment', 'github_reaction', 'github_reaction_removal'
+    )),
+    body text not null,
+    status text not null default 'pending' check (status in ('pending', 'sent', 'failed')),
+    attempts integer not null default 0,
+    last_error text,
+    next_attempt_at integer not null,
+    slack_ts text,
+    created_at integer not null,
+    sent_at integer
+  );
+  insert into outbox_rebuilt
+    select id, dedupe_key, channel, thread_ts, kind, body, status, attempts,
+      last_error, next_attempt_at, slack_ts, created_at, sent_at
+    from outbox;
+  drop table outbox;
+  alter table outbox_rebuilt rename to outbox;
+  create index outbox_pending on outbox (next_attempt_at)
+    where status = 'pending';
+  `,
+  `
+  alter table tasks add column closed_at integer;
+  `,
 ];
 
 const userVersionSchema = z.object({ user_version: z.number() });

@@ -8,6 +8,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { WORKER_EFFORT, WORKER_MODEL } from "../constants.ts";
+import { agentAccountEnvironment } from "../github/agent-account-environment.ts";
+import type { AgentAccount } from "../github/resolve-agent-account.ts";
 import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
@@ -22,6 +24,7 @@ import { REPORT_STATES, type WorkerReport } from "./record-report.ts";
 import { type ToolOutcome, toToolResult } from "./tool-outcome.ts";
 import { createWorkerGuard } from "./worker-guard.ts";
 import { workerInstructions } from "./worker-instructions.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 
 export interface WorkerTurn {
   readInputIds: number[];
@@ -41,11 +44,13 @@ export interface WorkerSessionOptions {
   repo: Repo;
   worktree: Worktree;
   inputs: readonly TaskInput[];
-  ack(): string;
+  ack(): Promise<string>;
   readThread(): Promise<string>;
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
   nothingToReport(): ToolOutcome;
+  /** The task's pull request, once it has one. */
+  pullRequest(): TaskPullRequest | undefined;
   events: WorkerSessionEvents;
 }
 
@@ -66,6 +71,8 @@ export interface ClaudeSessionStarterOptions {
   homeDirectory?: string;
   /** Run the worker's shell commands in Claude Code's sandbox. */
   sandbox?: boolean;
+  /** Act on GitHub as this account; without one, workers use the machine's own GitHub logins. */
+  gitHubAccount?: AgentAccount | undefined;
 }
 
 export const WORKER_SERVER_NAME = "superagent";
@@ -176,7 +183,7 @@ export const createAckTool = (ack: WorkerSessionOptions["ack"]) =>
     "ack",
     "Put 👀 on the owner's messages you've been given and haven't finished yet, so they know you've seen them. Call it when you start on a message from the owner.",
     {},
-    async () => ({ content: [{ type: "text", text: ack() }] }),
+    async () => ({ content: [{ type: "text", text: await ack() }] }),
   );
 
 export const createReadThreadTool = (
@@ -206,7 +213,7 @@ export const createReadThreadTool = (
 export const createReportTool = (report: WorkerSessionOptions["report"]) =>
   tool(
     "report",
-    "Tell the owner where the task stands. It posts to the task's Slack thread, and nothing else you write reaches them.",
+    "Say where the task stands. It's posted where the messages you're answering came from: the task's Slack thread for Slack messages, the pull request for [github] ones.",
     {
       state: z
         .enum(REPORT_STATES)
@@ -264,6 +271,7 @@ export const createClaudeSessionStarter =
     environment = process.env,
     homeDirectory = homedir(),
     sandbox = false,
+    gitHubAccount,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
   ({
     task,
@@ -275,6 +283,7 @@ export const createClaudeSessionStarter =
     report,
     handBack,
     nothingToReport,
+    pullRequest,
     events,
   }) => {
     const gitDirectory = path.join(repo.path, ".git");
@@ -298,6 +307,7 @@ export const createClaudeSessionStarter =
                   gitDirectory,
                   baseBranch: repo.baseBranch,
                   homeDirectory,
+                  pullRequest,
                 }),
               ],
               onFailure: "block",
@@ -324,7 +334,13 @@ export const createClaudeSessionStarter =
             ],
           }),
         },
-        env: { ...agentEnvironment(environment), ...WORKER_FIXED_ENVIRONMENT },
+        env: {
+          ...agentEnvironment(environment),
+          ...(gitHubAccount === undefined
+            ? {}
+            : agentAccountEnvironment(gitHubAccount)),
+          ...WORKER_FIXED_ENVIRONMENT,
+        },
         title: task.title,
       },
       prompts: inputs.map(toAgentPrompt),

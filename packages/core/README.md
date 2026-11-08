@@ -141,31 +141,74 @@ store.transaction(() => {
 | `tasks`   | What work exists and where is it?                          | Short random IDs; every state change goes through `TASK_TRANSITIONS`, and an illegal one throws     |
 | `inputs`  | What has each worker been told, and what is still waiting? | One input per `(source, ref)`                                                                       |
 | `reports` | What did the worker last say?                              | `latest(taskId)` is the newest                                                                      |
-| `outbox`  | What must reach Slack, and did it?                         | One entry per `dedupeKey`; exponential backoff from 5 seconds up to 5 minutes, failed after 8 tries |
+| `outbox`  | What must reach Slack or GitHub, and did it?               | One entry per `dedupeKey`; exponential backoff from 5 seconds up to 5 minutes, failed after 8 tries |
 | `kv`      | Router session ID, prompt version, cursors                 | Values are JSON, read back through the zod schema you pass                                          |
 
 `store.transaction(work)` runs synchronous work in one `BEGIN IMMEDIATE` transaction and rolls it all back if `work` throws. A transaction inside another joins the outer one. `openTestStore()` gives tests an in-memory store with a clock they can move.
 
-## `@repo/core/outbox`
+## `@repo/core/github`
 
-The sender that turns outbox rows into Slack posts and reactions. Everything the bot says goes through it, so a reply queued just before a crash still goes out after the restart.
+superagent's own GitHub account, so its pull requests, comments, and commits are never the owner's.
 
 ```ts
+import { createGitHubClient, resolveAgentAccount } from "@repo/core/github";
+import { createClaudeSessionStarter } from "@repo/core/tasks";
+
+const gitHubAccount = await resolveAgentAccount({
+  client: createGitHubClient({ token }),
+  token, // a token for superagent's own account
+  ownerLogin: "octocat", // refused if the token is the owner's
+});
+createClaudeSessionStarter({ gitHubAccount });
+```
+
+- **`resolveAgentAccount`** asks GitHub whose the token is, refuses the owner's own account, and returns its login and GitHub's noreply address for it.
+- **Workers with an account** get its token as `GH_TOKEN`, so `gh` acts as the agent. Git pushes to GitHub over https with the same token, even where a remote is SSH and whatever credential helpers or SSH keys the machine has. Commits are authored as the agent.
+- **Without one,** workers use the machine's own `gh` and git logins, as before.
+
+```ts
+import { createPullRequestWatcher } from "@repo/core/github";
+
+const watcher = createPullRequestWatcher({
+  store,
+  client, // the agent's
+  repos, // repo name -> Repo
+  agentLogin: gitHubAccount.login,
+  ownerLogin: "octocat",
+  wakeOutbox: outboxSender.wake,
+  wakeTaskRunner: taskRunner.wake,
+  logger: console,
+});
+watcher.start(); // polls every minute; watcher.stop() on shutdown
+```
+
+- **What reaches the worker:** the owner's reviews and comments, installed bots' such as Greptile's (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. A comment edited after it was read comes again, saying so, with its new text, such as Greptile's summary, which it rewrites after each review. The worker answers on GitHub: 👀 on the comment, resolving a review thread it fixed or replying in it to decline, and a report posted as a pull request comment instead of in Slack. Once the turn ends, 👀 becomes 👍. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
+- **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. Anything else gets one note in the thread and is left alone.
+- **A merge or close** posts once in the thread and ends the task as done.
+- **Cost:** a quiet pull request takes one request a minute, and one more every five minutes for its checks. Reviews and comments are read only when it changed, and checks for a new head commit, while some are pending, and every five minutes otherwise, so CI that starts late or is rerun still counts.
+
+## `@repo/core/outbox`
+
+The sender that turns outbox rows into Slack posts and reactions, and into comments and reactions on GitHub as the agent's account. Everything the bot says goes through it, so a reply queued just before a crash still goes out after the restart.
+
+```ts
+import { createGitHubDelivery } from "@repo/core/github";
 import { createOutboxSender } from "@repo/core/outbox";
 
 const outboxSender = createOutboxSender({
   outbox: store.outbox,
   logger: console,
 });
-outboxSender.start(slack); // the gateway is the delivery
+outboxSender.start(slack, createGitHubDelivery({ client, agentLogin })); // GitHub's is optional
 outboxSender.wake(); // after queueing something, to send it now
 await outboxSender.stop(); // on shutdown: finishes the post in flight
 ```
 
 - **When it sends:** right away when woken, and on a one-second poll that also picks up retries once their backoff has passed. Only one pass runs at a time; a wake during a pass asks for one more.
-- **Order:** an entry waits while an earlier entry in the same thread is still pending, so a retry never reorders a conversation.
-- **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry; a rate limit waits at least as long as Slack's `Retry-After` asks. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent.
-- **No double posts after a crash:** the attempt is counted before Slack is called, and each post carries its dedupe key in message metadata. Before posting an entry that was attempted before, the sender looks for the bot's post with that key in the thread, and records it instead of posting again.
+- **Order:** an entry waits while an earlier entry in the same thread is still pending, so a retry never reorders a conversation. GitHub entries use `github:<owner/name>` as the channel and the pull request's number as the thread, so one pull request's comments and reactions go out in order, and 👀 comes off before 👍 goes on.
+- **Without a GitHub account:** a GitHub entry fails at once and is logged.
+- **Failures:** rate limits, network errors, timeouts, and Slack-side errors back off and retry; a rate limit waits at least as long as Slack's `Retry-After` asks. Errors retrying can't fix (`not_in_channel`, `channel_not_found`, `msg_too_long`, …) fail the entry at once and log it. A reaction that is already there counts as sent, and one already gone counts as removed. On GitHub, rate limits (403, 429), timeouts, server errors, and network failures retry; other refusals fail the entry.
+- **No double posts after a crash:** the attempt is counted before Slack is called, and each post carries its dedupe key in message metadata. Before posting an entry that was attempted before, the sender looks for the bot's post with that key in the thread, and records it instead of posting again. A GitHub comment carries the key as a hidden `<!-- superagent:… -->` marker, checked the same way.
 - **Stopping:** `stop()` lets a post already on its way finish, and starts nothing after that, including a post that was waiting on the duplicate check. An entry left that way stays pending and goes out after the next start.
 
 ## `@repo/core/recovery`
@@ -269,9 +312,9 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 - **A new request:** `startTask` queues a task that owns the thread and keeps the message as its first input. Nothing is posted until the worker acts.
 - **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
 - **Worker tools:** the worker reaches Slack only through five tools.
-  - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
+  - `ack` puts 👀 on each of your messages it has been given and hasn't finished, in Slack, and on GitHub for pull request comments, as the agent's account. It is told to call it when it starts on a message. When a turn that didn't fail ends, 👀 becomes ✅ in Slack and 👍 on GitHub; a message handed back is left for the router.
   - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
-  - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
+  - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post, in one transaction. The post goes where the messages it answers came from: the Slack thread for Slack messages, a comment on the pull request for `[github]` ones, both for a turn that had both. The runner works that out, not the worker.
   - `hand_back` gives the router a message that isn't about the task, with why. Each Slack message reaches the worker labeled `[message N]`, and the worker names the one it means. The task's own request can't be handed back.
   - `nothing_to_report` ends a turn that only handed messages back: the task returns to where it stood, and nothing is posted. The runner refuses it in a turn without a hand-back, or before the task has reported.
 - **Follow-ups:** a reply in the task's thread, with or without an @-mention, becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.
@@ -280,4 +323,4 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 - **Limits:** at most three sessions run at once; other tasks wait, oldest first.
 - **When things go wrong:** a turn that ends without a report posts the worker's last message and waits on you. A turn that ends with `nothing_to_report` posts nothing, and the task returns to where it stood. A failed turn, a session that ends early, or a task that can't start is marked `failed` with the reason. Replying in the thread tries again.
 
-Sessions use `claude-opus-5-5` at high effort, in `dontAsk` mode with an allowlist of working tools. They load only those built-in tools and only the `superagent` MCP server, so a repo's `.mcp.json` and the machine's claude.ai connectors never reach a worker. A `PreToolUse` guard refuses merges, approvals, closing issues, force pushes, pushes to the base branch, writes outside the worktree, and reads of credential files. With `createClaudeSessionStarter({ sandbox: true })` the worker's shell commands also run in Claude Code's sandbox. Sessions get only an allowlist of the service's environment (the shell basics, `ANTHROPIC_*`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and the commit identity), so they use this machine's Claude Code login (or `ANTHROPIC_API_KEY`) and its `gh` and push credentials, and never the Slack tokens.
+Sessions use `claude-opus-5-5` at high effort, in `dontAsk` mode with an allowlist of working tools. They load only those built-in tools and only the `superagent` MCP server, so a repo's `.mcp.json` and the machine's claude.ai connectors never reach a worker. A `PreToolUse` guard refuses merges, approvals, closing issues, force pushes, pushes to the base branch, comments of the worker's own on the task's pull request (its report is posted there), writes outside the worktree, and reads of credential files. With `createClaudeSessionStarter({ sandbox: true })` the worker's shell commands also run in Claude Code's sandbox. Sessions get only an allowlist of the service's environment (the shell basics, `ANTHROPIC_*`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and the commit identity), so they use this machine's Claude Code login (or `ANTHROPIC_API_KEY`) and its `gh` and push credentials, and never the Slack tokens.

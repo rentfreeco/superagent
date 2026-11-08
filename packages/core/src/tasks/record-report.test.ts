@@ -119,6 +119,75 @@ describe("recordReport", () => {
     expect(queuedPosts()).toEqual([]);
   });
 
+  it("turns down a pull request outside the task's repo, and takes one inside it whatever the case", () => {
+    const { store, task } = setup();
+    const reportIn = (prUrl: string) =>
+      recordReport({
+        store,
+        taskId: task.id,
+        report: { state: "ready", summary: "Fixed.", prUrl },
+        repository: "pakgin/superagent",
+      });
+
+    expect(reportIn("https://github.com/someone/else/pull/3")).toEqual({
+      isAccepted: false,
+      reply:
+        "Not posted: that pull request is in someone/else, and this task's repo is pakgin/superagent. Open it there, from your branch.",
+    });
+    expect(store.tasks.get(task.id)?.prNumber).toBeNull();
+    expect(
+      reportIn("https://github.com/Pakgin/SuperAgent/pull/42").isAccepted,
+    ).toBe(true);
+    expect(store.tasks.get(task.id)?.prNumber).toBe(42);
+  });
+
+  it("posts a report answering GitHub messages on the pull request instead of in Slack", () => {
+    const { store, task } = setup();
+
+    const outcome = recordReport({
+      store,
+      taskId: task.id,
+      report: {
+        state: "waiting",
+        summary: "Renamed it, as asked.",
+        question: "Should the old name stay as an alias?",
+      },
+      destinations: {
+        slack: false,
+        pullRequest: { repository: "pakgin/superagent", number: 42 },
+      },
+    });
+
+    expect(outcome).toEqual({
+      isAccepted: true,
+      reply:
+        "Posted on the pull request, where the messages came from. End your turn now.",
+    });
+    expect(store.tasks.get(task.id)?.state).toBe("waiting");
+    expect(
+      store.outbox
+        .pending()
+        .map(({ dedupeKey, channel, threadTs, message }) => ({
+          dedupeKey,
+          channel,
+          threadTs,
+          message,
+        })),
+    ).toEqual([
+      {
+        dedupeKey: expect.stringMatching(/^report:\d+:github$/),
+        channel: "github:pakgin/superagent",
+        threadTs: "42",
+        message: {
+          kind: "github_comment",
+          repository: "pakgin/superagent",
+          issueNumber: 42,
+          text: "Renamed it, as asked.\n\n**Question:** Should the old name stay as an alias?",
+        },
+      },
+    ]);
+  });
+
   it("turns down a report once the task isn't running, so a stopped task stays quiet", () => {
     const { queuedPosts, report, store, task } = setup();
     store.tasks.transition(task.id, "stopped");

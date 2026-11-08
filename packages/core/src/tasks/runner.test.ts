@@ -6,6 +6,7 @@ import type { OutboxMessage } from "../store/outbox.ts";
 import type { Store } from "../store/open-store.ts";
 import { openTestStore } from "../store/open-test-store.ts";
 import type { TaskState } from "../store/tasks.ts";
+import { closeTask } from "./close-task.ts";
 import type {
   StartWorkerSession,
   WorkerSessionOptions,
@@ -376,6 +377,172 @@ describe("createTaskRunner", () => {
     expect(wakeRouter).toHaveBeenCalledOnce();
   });
 
+  it("puts 👀 on the GitHub comments the worker was given through the outbox, on the task's pull request", async () => {
+    const {
+      addInput,
+      createTask,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
+    addInput(task.id);
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:review-comment:21",
+      text: "The owner commented on src/math.js line 3.",
+    });
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:check-run:9",
+      text: 'The check "test" failed.',
+    });
+    await startRunner(1);
+
+    expect(sessionAt(sessions, 0).options.pullRequest()).toEqual({
+      repository: "pakgin/superagent",
+      number: 7,
+    });
+    expect(await sessionAt(sessions, 0).options.ack()).toBe(
+      "Put 👀 on the message.",
+    );
+    expect(sendQueuedMessages()).toEqual([
+      {
+        kind: "github_reaction",
+        repository: "pakgin/superagent",
+        subject: "review-comment",
+        subjectId: 21,
+        content: "eyes",
+      },
+    ]);
+  });
+
+  it("swaps 👀 for ✅ in Slack and 👍 on GitHub once a turn finishes, but not after a failed one", async () => {
+    const {
+      addInput,
+      createTask,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
+    const request = addInput(task.id);
+    store.events.record({
+      eventId: request?.ref ?? "",
+      type: "app_mention",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "fix the flaky test",
+    });
+    const comment = store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:comment:31",
+      text: "The owner commented on pull request #7.",
+    });
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+
+    session.options.events.onTurnEnd({
+      readInputIds: [request?.id ?? 0],
+      isError: true,
+      resultText: "The API is overloaded.",
+      isIdle: false,
+    });
+    const afterFailedTurn = sendQueuedMessages();
+    session.options.events.onTurnEnd({
+      readInputIds: [comment?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+
+    expect(afterFailedTurn).toEqual([]);
+    expect(sendQueuedMessages()).toEqual([
+      {
+        kind: "github_reaction_removal",
+        repository: "pakgin/superagent",
+        subject: "issue-comment",
+        subjectId: 31,
+        content: "eyes",
+      },
+      {
+        kind: "github_reaction",
+        repository: "pakgin/superagent",
+        subject: "issue-comment",
+        subjectId: 31,
+        content: "+1",
+      },
+    ]);
+    session.options.events.onTurnEnd({
+      readInputIds: [request?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+    expect(sendQueuedMessages()).toEqual([
+      { kind: "reaction_removal", name: "eyes", timestamp: "100.000002" },
+      { kind: "reaction", name: "white_check_mark", timestamp: "100.000002" },
+    ]);
+  });
+
+  it("posts a report answering a GitHub comment on the pull request, and one answering Slack in Slack", async () => {
+    const {
+      addInput,
+      createTask,
+      runner,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
+    const request = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [request?.id ?? 0] }),
+    );
+    first.options.events.onEnd(undefined);
+    sendQueuedMessages();
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:comment:31",
+      text: "The owner commented on pull request #7: also clear it on deploy",
+    });
+    await runner.reconcile();
+
+    sessionAt(sessions, 1).options.report({
+      state: "ready",
+      summary: "It's cleared on deploy now.",
+      prUrl: "https://github.com/pakgin/superagent/pull/7",
+    });
+
+    expect(
+      sendQueuedMessages().filter(
+        ({ kind }) => kind === "post" || kind === "github_comment",
+      ),
+    ).toEqual([
+      {
+        kind: "github_comment",
+        repository: "pakgin/superagent",
+        issueNumber: 7,
+        text: "It's cleared on deploy now.",
+      },
+    ]);
+  });
+
   it("puts 👀 on the owner's messages the worker was given when it calls ack", async () => {
     const {
       addInput,
@@ -403,8 +570,8 @@ describe("createTaskRunner", () => {
     addInput(task.id, "arrived after the start");
     wakeOutbox.mockClear();
 
-    expect(session.options.ack()).toBe("Put 👀 on the owner's message.");
-    expect(session.options.ack()).toBe(
+    expect(await session.options.ack()).toBe("Put 👀 on the message.");
+    expect(await session.options.ack()).toBe(
       "There's no new message to acknowledge.",
     );
 
@@ -564,6 +731,7 @@ describe("createTaskRunner", () => {
       createTask,
       queuedPosts,
       runner,
+      sendQueuedMessages,
       sessions,
       startRunner,
       store,
@@ -581,7 +749,9 @@ describe("createTaskRunner", () => {
     recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
     await runner.reconcile();
     const resumed = sessionAt(sessions, 1);
-    const postsBefore = queuedPosts().length;
+    const postCount = () =>
+      queuedPosts().filter(({ message }) => message.kind === "post").length;
+    const postsBefore = postCount();
 
     resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
     const outcome = resumed.options.nothingToReport();
@@ -594,7 +764,13 @@ describe("createTaskRunner", () => {
       reply: "The task stays done, and nothing is posted. End your turn.",
     });
     expect(stateOf(store, task.id)).toBe("done");
-    expect(queuedPosts()).toHaveLength(postsBefore);
+    expect(postCount()).toBe(postsBefore);
+    expect(
+      sendQueuedMessages().filter(
+        (message) =>
+          message.kind === "reaction" && message.name === "white_check_mark",
+      ),
+    ).toEqual([]);
     expect(resumed.end).toHaveBeenCalledOnce();
   });
 
@@ -771,6 +947,97 @@ describe("createTaskRunner", () => {
     expect(
       sessionAt(sessions, 1).options.inputs.map(({ text }) => text),
     ).toEqual(["actually, keep going"]);
+  });
+
+  it("keeps a task its pull request closed done: no reopening by its live session, which is interrupted, until the owner writes again", async () => {
+    const {
+      addInput,
+      createTask,
+      queuedPosts,
+      runner,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    const opened = session.options.report({
+      state: "ready",
+      summary: "Opened #7.",
+      prUrl: "https://github.com/pakgin/superagent/pull/7",
+    });
+
+    closeTask({ store, taskId: task.id });
+    const lateReport = session.options.report({
+      state: "ready",
+      summary: "Pushed one more fix.",
+      prUrl: "https://github.com/pakgin/superagent/pull/7",
+    });
+    session.options.events.onTurnEnd(idleTurn({ isIdle: false }));
+    const postsAfterClose = queuedPosts().length;
+    await runner.reconcile();
+    await vi.waitFor(() => expect(session.end).toHaveBeenCalledOnce());
+
+    expect(opened.isAccepted).toBe(true);
+    expect(lateReport).toEqual({
+      isAccepted: false,
+      reply: "Not posted: this task is done. Stop working and end your turn.",
+    });
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(session.interrupt).toHaveBeenCalledOnce();
+    expect(queuedPosts()).toHaveLength(postsAfterClose);
+
+    addInput(task.id, "reopen it, the merge broke deploys");
+    session.options.events.onEnd(undefined);
+    await vi.waitFor(() => expect(sessions).toHaveLength(2));
+    expect(stateOf(store, task.id)).toBe("running");
+  });
+
+  it("keeps a task closed after its worker had already reported done, even for a turn it had queued", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    session.options.report({ state: "done", summary: "It's the cache." });
+
+    closeTask({ store, taskId: task.id });
+    session.options.events.onTurnEnd(idleTurn({ isIdle: false }));
+    const lateReport = session.options.report({
+      state: "done",
+      summary: "Also cleared it on deploy.",
+    });
+    await runner.reconcile();
+
+    expect(lateReport.isAccepted).toBe(false);
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(session.interrupt).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't interrupt a worker that reported done itself, and a follow-up still reopens the task", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+
+    session.options.report({ state: "done", summary: "It's the cache." });
+    await runner.reconcile();
+    addInput(task.id, "then clear it on deploy");
+    await runner.reconcile();
+    const answer = session.options.report({
+      state: "done",
+      summary: "It's cleared on deploy now.",
+    });
+
+    expect(session.interrupt).not.toHaveBeenCalled();
+    expect(session.sent).toHaveLength(2);
+    expect(answer.isAccepted).toBe(true);
+    expect(stateOf(store, task.id)).toBe("done");
   });
 
   it("fails a task whose session ends before the worker reported", async () => {

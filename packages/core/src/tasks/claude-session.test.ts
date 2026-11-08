@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Repo } from "../repos/config.ts";
+import type { AgentAccount } from "../github/resolve-agent-account.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
@@ -41,6 +42,7 @@ const queuedTask: Task = {
   originTs: "100.000001",
   createdAt: 1,
   lastActivityAt: 1,
+  closedAt: null,
 };
 
 const taskInput = (fields: Partial<TaskInput>): TaskInput => ({
@@ -69,11 +71,13 @@ const setup = ({
   conversationMessages = createAsyncQueue<unknown>(),
   iterate = () => conversationMessages[Symbol.asyncIterator](),
   sandbox = false,
+  gitHubAccount,
 }: {
   task?: Task;
   conversationMessages?: ReturnType<typeof createAsyncQueue<unknown>>;
   iterate?: AgentConversation[typeof Symbol.asyncIterator];
   sandbox?: boolean;
+  gitHubAccount?: AgentAccount;
 } = {}) => {
   const requests: ConversationRequest[] = [];
   const conversation = {
@@ -104,6 +108,7 @@ const setup = ({
     },
     homeDirectory: "/home/agent",
     sandbox,
+    gitHubAccount,
   })({
     task,
     repo: superagentRepo,
@@ -112,7 +117,7 @@ const setup = ({
       taskInput({}),
       taskInput({ id: 2, source: "system", ref: null, text: "restarted" }),
     ],
-    ack: () => "Put 👀 on the owner's message.",
+    ack: async () => "Put 👀 on the message.",
     readThread: async () => "[owner]\nfix the flaky test",
     report: (_report: WorkerReport): ToolOutcome => ({
       isAccepted: true,
@@ -120,6 +125,7 @@ const setup = ({
     }),
     handBack: () => ({ isAccepted: true, reply: "Handed back." }),
     nothingToReport: () => ({ isAccepted: true, reply: "Nothing posted." }),
+    pullRequest: () => ({ repository: "pakgin/superagent", number: 6 }),
     events,
   });
   const [request] = requests;
@@ -212,8 +218,43 @@ describe("createClaudeSessionStarter", () => {
       "toolu_1",
       { signal: new AbortController().signal },
     );
+    const commentDecision = await guard?.(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s-1",
+        transcript_path: "/tmp/transcript.jsonl",
+        cwd: "/data/worktrees/abcd2345",
+        tool_name: "Bash",
+        tool_input: { command: 'gh pr comment 6 --body "Done."' },
+        tool_use_id: "toolu_2",
+      },
+      "toolu_2",
+      { signal: new AbortController().signal },
+    );
     expect(decision).toMatchObject({
       hookSpecificOutput: { permissionDecision: "deny" },
+    });
+    expect(commentDecision).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    });
+  });
+
+  it("acts on GitHub as the agent's own account when it has one, never the machine's", () => {
+    const { request } = setup({
+      gitHubAccount: {
+        token: "ghp_agent",
+        login: "superagent-bot",
+        email: "4242+superagent-bot@users.noreply.github.com",
+      },
+    });
+
+    expect(request.options.env).toMatchObject({
+      GH_TOKEN: "ghp_agent",
+      GIT_AUTHOR_NAME: "superagent-bot",
+      GIT_COMMITTER_EMAIL: "4242+superagent-bot@users.noreply.github.com",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     });
   });
 
@@ -362,13 +403,13 @@ describe("createClaudeSessionStarter", () => {
 
 describe("createAckTool", () => {
   it("puts 👀 on the owner's messages and says what it did", async () => {
-    const ack = vi.fn(() => "Put 👀 on the owner's message.");
+    const ack = vi.fn(async () => "Put 👀 on the message.");
 
     const answer = await createAckTool(ack).handler({}, undefined);
 
     expect(ack).toHaveBeenCalledOnce();
     expect(answer).toEqual({
-      content: [{ type: "text", text: "Put 👀 on the owner's message." }],
+      content: [{ type: "text", text: "Put 👀 on the message." }],
     });
   });
 });

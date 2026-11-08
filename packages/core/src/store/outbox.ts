@@ -6,6 +6,15 @@ import {
   OUTBOX_MAX_RETRY_DELAY_MS,
 } from "../constants.ts";
 
+const gitHubSubjectSchema = z.enum(["issue-comment", "review-comment"]);
+
+const gitHubReactionFields = {
+  repository: z.string(),
+  subject: gitHubSubjectSchema,
+  subjectId: z.number(),
+  content: z.string(),
+};
+
 const outboxMessageSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("post"), text: z.string() }),
   z.object({
@@ -13,7 +22,25 @@ const outboxMessageSchema = z.discriminatedUnion("kind", [
     name: z.string(),
     timestamp: z.string(),
   }),
+  z.object({
+    kind: z.literal("reaction_removal"),
+    name: z.string(),
+    timestamp: z.string(),
+  }),
+  z.object({
+    kind: z.literal("github_comment"),
+    repository: z.string(),
+    issueNumber: z.number(),
+    text: z.string(),
+  }),
+  z.object({ kind: z.literal("github_reaction"), ...gitHubReactionFields }),
+  z.object({
+    kind: z.literal("github_reaction_removal"),
+    ...gitHubReactionFields,
+  }),
 ]);
+
+export type GitHubSubject = z.infer<typeof gitHubSubjectSchema>;
 
 export type OutboxMessage = z.infer<typeof outboxMessageSchema>;
 
@@ -44,6 +71,7 @@ export interface OutboxEntry extends Omit<
 
 export interface NewOutboxEntry {
   dedupeKey: string;
+  /** The Slack channel, or github:<owner/name> for a GitHub entry. Entries in one channel and thread go out in order. */
   channel: string;
   threadTs: string | null;
   message: OutboxMessage;

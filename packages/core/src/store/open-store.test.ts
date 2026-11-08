@@ -115,4 +115,41 @@ describe("transaction", () => {
       /synchronous/,
     );
   });
+
+  it("keeps the outbox's rows when migration 3 rebuilds it for reaction removals and GitHub entries", () => {
+    const storePath = path.join(workspaceDirectory, "state.db");
+    const database = new DatabaseSync(storePath);
+    database.exec("pragma journal_mode = wal");
+    for (const migration of MIGRATIONS.slice(0, 2)) database.exec(migration);
+    database.exec("pragma user_version = 2");
+    database.exec(
+      `insert into outbox (dedupe_key, channel, thread_ts, kind, body, next_attempt_at, created_at)
+       values ('report:1', 'C0123ABCD', '1.000001', 'post', '{"text":"Done."}', 1, 1)`,
+    );
+    database.close();
+
+    const store = openStore({ path: storePath });
+    try {
+      expect(store.outbox.get(1)?.message).toEqual({
+        kind: "post",
+        text: "Done.",
+      });
+      expect(
+        store.outbox.enqueue({
+          dedupeKey: "done:github:comment:31",
+          channel: "github:pakgin/scratch",
+          threadTs: "7",
+          message: {
+            kind: "github_reaction",
+            repository: "pakgin/scratch",
+            subject: "issue-comment",
+            subjectId: 31,
+            content: "+1",
+          },
+        })?.message.kind,
+      ).toBe("github_reaction");
+    } finally {
+      store.close();
+    }
+  });
 });

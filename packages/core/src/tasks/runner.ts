@@ -9,6 +9,8 @@ import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
 import { acknowledgeMessages } from "./acknowledge-messages.ts";
+import { finishAcknowledgements } from "./finish-acknowledgements.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 import { handBackMessage } from "./hand-back-message.ts";
 import type {
   StartWorkerSession,
@@ -21,6 +23,7 @@ import {
   prepareWorktree as prepareGitWorktree,
 } from "./prepare-worktree.ts";
 import {
+  type ReportDestinations,
   recordReport,
   REPORT_STATES,
   type WorkerReport,
@@ -71,6 +74,10 @@ interface LiveSession {
   hasHandedBackThisTurn: boolean;
   /** Whether the worker said the current turn has nothing to report. */
   hasNothingToReport: boolean;
+  /** Inputs this session was given since the worker's last accepted report, for where the next one goes. */
+  deliveredSinceReport: Set<number>;
+  /** Inputs the worker handed back, which the router answers instead. */
+  handedBackInputIds: Set<number>;
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -79,8 +86,8 @@ const isReportedState = (state: TaskState): boolean =>
 const describeAcknowledgement = (acknowledgedCount: number): string => {
   if (acknowledgedCount === 0) return "There's no new message to acknowledge.";
   return acknowledgedCount === 1
-    ? "Put 👀 on the owner's message."
-    : `Put 👀 on ${acknowledgedCount} of the owner's messages.`;
+    ? "Put 👀 on the message."
+    : `Put 👀 on ${acknowledgedCount} messages.`;
 };
 
 const fallbackSummary = (text: string, whenEmpty: string): string =>
@@ -114,9 +121,17 @@ export const createTaskRunner = ({
     }
   };
 
+  /** Its pull request closed it, so no session reopens it; the owner's next message does, through a launch. */
+  const isClosed = (taskId: string): boolean =>
+    (store.tasks.get(taskId)?.closedAt ?? null) !== null;
+
   const reopenReportedTask = (taskId: string): void => {
     const task = store.tasks.get(taskId);
-    if (task !== undefined && isReportedState(task.state)) {
+    if (
+      task !== undefined &&
+      task.closedAt === null &&
+      isReportedState(task.state)
+    ) {
       store.tasks.transition(taskId, "running");
     }
   };
@@ -133,10 +148,40 @@ export const createTaskRunner = ({
     return true;
   };
 
-  const acknowledge = (taskId: string): string => {
-    const acknowledgedCount = acknowledgeMessages({ store, taskId });
+  const repositoryOf = (taskId: string): string | undefined =>
+    repos.get(store.tasks.get(taskId)?.repo ?? "")?.github;
+
+  const pullRequestOf = (taskId: string): TaskPullRequest | undefined => {
+    const repository = repositoryOf(taskId);
+    const number = store.tasks.get(taskId)?.prNumber;
+    return repository === undefined || number === null || number === undefined
+      ? undefined
+      : { repository, number };
+  };
+
+  const acknowledge = async (taskId: string): Promise<string> => {
+    const acknowledgedCount = acknowledgeMessages({
+      store,
+      taskId,
+      pullRequest: pullRequestOf(taskId),
+    });
     if (acknowledgedCount > 0) wakeOutbox();
     return describeAcknowledgement(acknowledgedCount);
+  };
+
+  /** Slack for Slack messages, the pull request for GitHub ones, Slack when there were neither. */
+  const reportDestinations = (
+    taskId: string,
+    inputIds: Iterable<number>,
+  ): ReportDestinations => {
+    const sources = new Set(
+      [...inputIds].map((inputId) => store.inputs.get(inputId)?.source),
+    );
+    const isFromSlack = sources.has("slack") || sources.has("router");
+    const pullRequest = sources.has("github")
+      ? pullRequestOf(taskId)
+      : undefined;
+    return { slack: isFromSlack || pullRequest === undefined, pullRequest };
   };
 
   const handBack = (
@@ -147,7 +192,11 @@ export const createTaskRunner = ({
     const outcome = handBackMessage({ store, taskId, inputId, reason });
     if (!outcome.isAccepted) return outcome;
     const live = liveSessions.get(taskId);
-    if (live !== undefined) live.hasHandedBackThisTurn = true;
+    if (live !== undefined) {
+      live.hasHandedBackThisTurn = true;
+      live.handedBackInputIds.add(inputId);
+      live.deliveredSinceReport.delete(inputId);
+    }
     wakeRouter();
     return outcome;
   };
@@ -184,19 +233,39 @@ export const createTaskRunner = ({
   const postReport = (
     taskId: string,
     workerReport: WorkerReport,
+    destinations?: ReportDestinations,
   ): ToolOutcome =>
-    settleReport(recordReport({ store, taskId, report: workerReport }));
+    settleReport(
+      recordReport({
+        store,
+        taskId,
+        report: workerReport,
+        repository: repositoryOf(taskId),
+        destinations,
+      }),
+    );
 
   const postWorkerReport = (
     taskId: string,
     workerReport: WorkerReport,
   ): ToolOutcome => {
+    const live = liveSessions.get(taskId);
     const outcome = settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
-        return recordReport({ store, taskId, report: workerReport });
+        return recordReport({
+          store,
+          taskId,
+          report: workerReport,
+          repository: repositoryOf(taskId),
+          destinations: reportDestinations(
+            taskId,
+            live?.deliveredSinceReport ?? [],
+          ),
+        });
       }),
     );
+    if (outcome.isAccepted) live?.deliveredSinceReport.clear();
     return outcome;
   };
 
@@ -207,6 +276,7 @@ export const createTaskRunner = ({
       reopenReportedTask(taskId);
       store.inputs.markDelivered(inputs.map(({ id }) => id));
     });
+    for (const { id } of inputs) live.deliveredSinceReport.add(id);
     live.session.send(inputs);
   };
 
@@ -217,6 +287,16 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
+    if (!turn.isError) {
+      const finishedCount = finishAcknowledgements({
+        store,
+        inputIds: turn.readInputIds.filter(
+          (inputId) => !live.handedBackInputIds.has(inputId),
+        ),
+        pullRequest: pullRequestOf(taskId),
+      });
+      if (finishedCount > 0) wakeOutbox();
+    }
     const { hasNothingToReport } = live;
     live.hasHandedBackThisTurn = false;
     live.hasNothingToReport = false;
@@ -233,25 +313,25 @@ export const createTaskRunner = ({
       live.session.end();
       return;
     }
-    postReport(
-      taskId,
-      turn.isError
-        ? {
-            state: "failed",
-            summary: fallbackSummary(
-              turn.resultText,
-              "The worker's turn failed.",
-            ),
-          }
-        : {
-            state: "waiting",
-            summary: fallbackSummary(
-              turn.resultText,
-              "The worker ended its turn without a report.",
-            ),
-            question: "How should I go on?",
-          },
-    );
+    if (turn.isError) {
+      postReport(taskId, {
+        state: "failed",
+        summary: fallbackSummary(turn.resultText, "The worker's turn failed."),
+      });
+    } else {
+      postReport(
+        taskId,
+        {
+          state: "waiting",
+          summary: fallbackSummary(
+            turn.resultText,
+            "The worker ended its turn without a report.",
+          ),
+          question: "How should I go on?",
+        },
+        reportDestinations(taskId, live.deliveredSinceReport),
+      );
+    }
     live.isEnding = true;
     live.session.end();
   };
@@ -346,6 +426,7 @@ export const createTaskRunner = ({
         report: (workerReport) => postWorkerReport(task.id, workerReport),
         handBack: (inputId, reason) => handBack(task.id, inputId, reason),
         nothingToReport: () => nothingToReport(task.id),
+        pullRequest: () => pullRequestOf(task.id),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live
@@ -357,6 +438,8 @@ export const createTaskRunner = ({
         isEnding: false,
         hasHandedBackThisTurn: false,
         hasNothingToReport: false,
+        deliveredSinceReport: new Set(inputs.map(({ id }) => id)),
+        handedBackInputIds: new Set(),
       };
       liveSessions.set(task.id, live);
       logger.info(
@@ -387,9 +470,10 @@ export const createTaskRunner = ({
       .sort((left, right) => left.createdAt - right.createdAt);
   };
 
-  const endStoppedSessions = (): void => {
+  const endStoppedAndClosedSessions = (): void => {
     for (const [taskId, live] of liveSessions) {
-      if (live.isEnding || store.tasks.get(taskId)?.state !== "stopped") {
+      const isStopped = store.tasks.get(taskId)?.state === "stopped";
+      if (live.isEnding || !(isStopped || isClosed(taskId))) {
         continue;
       }
       live.isEnding = true;
@@ -406,7 +490,7 @@ export const createTaskRunner = ({
 
   const reconcile = async (): Promise<void> => {
     if (!isRunning) return;
-    endStoppedSessions();
+    endStoppedAndClosedSessions();
     const startedLaunches: Promise<void>[] = [];
     for (const task of candidateTasks()) {
       const live = liveSessions.get(task.id);

@@ -85,6 +85,13 @@ describe("refusalFor commands", () => {
     "for n in 7; do gh issue close $n; done",
     "! git push -f",
     "echo gh pr merge",
+    "gh api -X PUT repos/pakgin/scratch/pulls/7/merge",
+    "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_1\"}) { clientMutationId } }'",
+    "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_1\"}) { clientMutationId } }'",
+    "gh api repos/pakgin/scratch/pulls/7/reviews -f event=APPROVE",
+    "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"PR_1\", event: APPROVE}) { clientMutationId } }'",
+    "gh api -X PATCH repos/pakgin/scratch/issues/3 -f state=closed",
+    "gh api graphql -f query='mutation { closeIssue(input: {issueId: \"I_1\"}) { clientMutationId } }'",
   ])("refuses `%s`", async (command) => {
     expect(await bash(command)).toEqual(expect.any(String));
   });
@@ -102,8 +109,57 @@ describe("refusalFor commands", () => {
     "git push origin agent/maintenance",
     'echo "gh pr merge"',
     "grep -rn gh src",
+    "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"T_1\"}) { thread { isResolved } } }'",
+    "gh api repos/pakgin/scratch/pulls/7/comments/21/replies -f body='Renamed it.'",
+    "gh api repos/pakgin/scratch/pulls/7/reviews",
+    "gh api -X PATCH repos/pakgin/scratch/pulls/7 -f title='Fix add'",
   ])("allows `%s`", async (command) => {
     expect(await bash(command)).toBeUndefined();
+  });
+});
+
+describe("refusalFor comments on the task's pull request", () => {
+  const withPullRequest: WorkerGuardOptions = {
+    ...options,
+    pullRequest: () => ({ repository: "pakgin/scratch", number: 6 }),
+  };
+  const bashOnTask = (command: string) =>
+    refusalFor("Bash", { command }, withPullRequest);
+
+  it.each([
+    'gh pr comment 6 --body "Done."',
+    "gh pr comment --body-file reply.md",
+    "gh pr comment https://github.com/pakgin/scratch/pull/6 -b Done.",
+    "gh issue comment 6 -b Done.",
+    "gh pr review 6 --comment -b 'Looks fine.'",
+    "gh api repos/pakgin/scratch/issues/6/comments -f body=Done.",
+    "gh api --method POST repos/pakgin/scratch/issues/6/comments --input reply.json",
+    "gh api repos/{owner}/{repo}/issues/6/comments -f body=Done.",
+    "gh api repos/Pakgin/Scratch/issues/6/comments -f body=Done.",
+    "gh pr comment 6 -R pakgin/scratch -b Done.",
+    "gh pr comment 6 --repo=github.com/pakgin/scratch -b Done.",
+  ])("refuses `%s`, since the report is posted there", async (command) => {
+    expect(await bashOnTask(command)).toContain("Your report is your answer");
+  });
+
+  it.each([
+    "gh pr comment 3 --body 'Linked from the other pull request.'",
+    "gh issue comment 12 -b 'Fixed in #6.'",
+    "gh api repos/pakgin/scratch/issues/6/comments",
+    "gh api --paginate repos/pakgin/scratch/issues/6/comments --jq '.[].body'",
+    "gh api repos/pakgin/scratch/pulls/6/comments/21/replies -f body='Renamed it.'",
+    "gh pr view 6 --comments",
+    "gh api --method GET repos/pakgin/scratch/issues/6/comments -f per_page=100",
+    "gh api -X GET repos/pakgin/scratch/issues/6/comments -F per_page=100",
+    "gh api repos/other/repo/issues/6/comments -f body='Fixed in pakgin/scratch#6.'",
+    "gh pr comment 6 --repo other/repo -b 'Fixed upstream.'",
+    "gh pr comment https://github.com/other/repo/pull/6 -b 'Fixed upstream.'",
+  ])("allows `%s`", async (command) => {
+    expect(await bashOnTask(command)).toBeUndefined();
+  });
+
+  it("allows commenting before the task has a pull request", async () => {
+    expect(await bash('gh pr comment --body "Opened."')).toBeUndefined();
   });
 });
 

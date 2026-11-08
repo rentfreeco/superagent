@@ -1,5 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import {
+  createGitHubClient,
+  createGitHubDelivery,
+  createPullRequestWatcher,
+  resolveAgentAccount,
+} from "@repo/core/github";
 import { createOutboxSender } from "@repo/core/outbox";
 import {
   recoverAfterRestart,
@@ -46,6 +52,23 @@ const describeRecovery = ({
 const main = async (): Promise<void> => {
   const environment = parseEnvironment(process.env);
   const { repos, channelRepos } = await loadConfig(CONFIG_PATH);
+  const gitHubClient =
+    environment.gitHub === undefined
+      ? undefined
+      : createGitHubClient({ token: environment.gitHub.token });
+  const gitHubAccount =
+    environment.gitHub === undefined || gitHubClient === undefined
+      ? undefined
+      : await resolveAgentAccount({
+          client: gitHubClient,
+          token: environment.gitHub.token,
+          ownerLogin: environment.gitHub.ownerLogin,
+        });
+  console.log(
+    gitHubAccount === undefined
+      ? "superagent: no SUPERAGENT_GITHUB_TOKEN, so workers use this machine's GitHub logins and pull requests aren't watched"
+      : `superagent: workers act on GitHub as ${gitHubAccount.login}, and their pull requests are watched`,
+  );
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
   const recoverySnapshot = takeRecoverySnapshot({
@@ -67,6 +90,7 @@ const main = async (): Promise<void> => {
     worktreesDirectory,
     startSession: createClaudeSessionStarter({
       sandbox: environment.workerSandbox,
+      gitHubAccount,
     }),
     wakeOutbox: outboxSender.wake,
     wakeRouter: () => router.wake(),
@@ -93,6 +117,21 @@ const main = async (): Promise<void> => {
     wakeTaskRunner: taskRunner.wake,
     logger: console,
   });
+  const pullRequestWatcher =
+    gitHubClient === undefined ||
+    gitHubAccount === undefined ||
+    environment.gitHub === undefined
+      ? undefined
+      : createPullRequestWatcher({
+          store,
+          client: gitHubClient,
+          repos,
+          agentLogin: gitHubAccount.login,
+          ownerLogin: environment.gitHub.ownerLogin,
+          wakeOutbox: outboxSender.wake,
+          wakeTaskRunner: taskRunner.wake,
+          logger: console,
+        });
 
   const connectToSlack = () =>
     SlackGateway.connect({
@@ -119,7 +158,15 @@ const main = async (): Promise<void> => {
     store.close();
     throw error;
   });
-  outboxSender.start(slack);
+  outboxSender.start(
+    slack,
+    gitHubClient === undefined || gitHubAccount === undefined
+      ? undefined
+      : createGitHubDelivery({
+          client: gitHubClient,
+          agentLogin: gitHubAccount.login,
+        }),
+  );
   console.log(
     `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}. Worktrees: ${worktreesDirectory}`,
   );
@@ -127,6 +174,7 @@ const main = async (): Promise<void> => {
   const disconnect = async (signal: NodeJS.Signals): Promise<void> => {
     console.log(`superagent: ${signal} received, disconnecting`);
     router.stop();
+    await pullRequestWatcher?.stop();
     await taskRunner.stop();
     await outboxSender.stop();
     await slack.close();
@@ -145,6 +193,7 @@ const main = async (): Promise<void> => {
   console.log(`superagent: recovery ${describeRecovery(recovery)}`);
   taskRunner.start(slack);
   router.start();
+  pullRequestWatcher?.start();
 };
 
 main().catch((error: unknown) => {

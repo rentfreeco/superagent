@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./github": "./src/github/index.ts",
     "./outbox": "./src/outbox/index.ts",
     "./recovery": "./src/recovery/index.ts",
     "./repos": "./src/repos/index.ts",

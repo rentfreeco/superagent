@@ -3,6 +3,15 @@ export {
   type AcknowledgeMessagesOptions,
 } from "./acknowledge-messages.ts";
 export {
+  finishAcknowledgements,
+  type FinishAcknowledgementsOptions,
+} from "./finish-acknowledgements.ts";
+export {
+  type MessageReaction,
+  messageReactionEntry,
+  type TaskPullRequest,
+} from "./message-reactions.ts";
+export {
   type AgentConversation,
   type AgentPrompt,
   type AgentSession,

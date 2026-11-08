@@ -7,11 +7,28 @@ export const OUTBOX_POLL_INTERVAL_MS = 1_000;
 
 export const SLACK_DELIVERY_TIMEOUT_MS = 10_000;
 
+export const GITHUB_API_URL = "https://api.github.com";
+export const GITHUB_API_VERSION = "2022-11-28";
+export const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
+export const GITHUB_ERROR_BODY_MAX_LENGTH = 300;
+export const GITHUB_NOREPLY_EMAIL_DOMAIN = "users.noreply.github.com";
+export const GITHUB_PAGE_SIZE = 100;
+export const GITHUB_MAX_PAGES = 10;
+
+export const PULL_REQUEST_POLL_INTERVAL_MS = 60_000;
+/** How often an unchanged head commit's checks are read again, for CI that starts late or is rerun. */
+export const PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS = 5 * 60_000;
+export const PULL_REQUEST_MAX_BOT_ROUNDS = 3;
+export const PULL_REQUEST_INPUT_MAX_LENGTH = 4_000;
+
 export const TASK_ID_LENGTH = 8;
 export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
 export const TASK_TITLE_MAX_LENGTH = 80;
 export const TASK_ACK_REACTION = "eyes";
+export const TASK_DONE_REACTION = "white_check_mark";
+/** GitHub's reactions have no check mark, so a finished comment gets a thumbs-up, as Greptile does. */
+export const GITHUB_DONE_REACTION = "+1";
 export const TASK_STOP_REACTION = "octagonal_sign";
 /** What the router reacts with to a message it lets be: thanks, an acknowledgement, a greeting, or anything else. */
 export const ROUTER_IGNORE_REACTIONS = [

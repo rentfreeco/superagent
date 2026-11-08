@@ -5,6 +5,7 @@ import {
   createOutboxSender,
   type OutboxDelivery,
   type OutboxFailure,
+  type OutboxGitHubDelivery,
   type OutboxPost,
 } from "./sender.ts";
 
@@ -31,6 +32,7 @@ const setup = () => {
       return `9.${String(postedKeys.length).padStart(6, "0")}`;
     }),
     react: vi.fn(async () => undefined),
+    unreact: vi.fn(async () => undefined),
     findPost: vi.fn(async (): Promise<string | undefined> => undefined),
     classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
   } satisfies OutboxDelivery;
@@ -247,7 +249,9 @@ describe("outbox sender", () => {
     delivery.post.mockRejectedValueOnce(new Error("socket hang up"));
 
     sender.start(delivery);
-    await vi.waitFor(() => expect(delivery.post).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(store.outbox.get(entryId)?.lastError).toBe("socket hang up"),
+    );
     clock.now = store.outbox.get(entryId)?.nextAttemptAt ?? clock.now;
 
     await vi.waitFor(() =>
@@ -275,5 +279,172 @@ describe("outbox sender", () => {
     expect(store.outbox.get(first)?.status).toBe("sent");
     expect(store.outbox.get(second)?.status).toBe("pending");
     expect(delivery.post).toHaveBeenCalledOnce();
+  });
+
+  it("takes a Slack reaction off, and delivers GitHub entries with the GitHub delivery", async () => {
+    const { delivery, sender, store } = setup();
+    const gitHub = {
+      comment: vi.fn(async () => undefined),
+      hasComment: vi.fn(async () => false),
+      react: vi.fn(async () => undefined),
+      unreact: vi.fn(async () => undefined),
+      classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
+    } satisfies OutboxGitHubDelivery;
+    store.outbox.enqueue({
+      dedupeKey: "unack:Ev1",
+      channel: CHANNEL,
+      threadTs: null,
+      message: {
+        kind: "reaction_removal",
+        name: "eyes",
+        timestamp: "1.000001",
+      },
+    });
+    const reaction = {
+      repository: "pakgin/scratch",
+      subject: "review-comment" as const,
+      subjectId: 21,
+    };
+    for (const [dedupeKey, message] of [
+      [
+        "unack:github:review-comment:21",
+        {
+          kind: "github_reaction_removal" as const,
+          ...reaction,
+          content: "eyes",
+        },
+      ],
+      [
+        "done:github:review-comment:21",
+        { kind: "github_reaction" as const, ...reaction, content: "+1" },
+      ],
+      [
+        "report:4:github",
+        {
+          kind: "github_comment" as const,
+          repository: "pakgin/scratch",
+          issueNumber: 7,
+          text: "Fixed.",
+        },
+      ],
+    ] as const) {
+      store.outbox.enqueue({
+        dedupeKey,
+        channel: "github:pakgin/scratch",
+        threadTs: "7",
+        message,
+      });
+    }
+
+    sender.start(delivery, gitHub);
+    await sender.drain();
+
+    expect(delivery.unreact).toHaveBeenCalledWith({
+      channel: CHANNEL,
+      timestamp: "1.000001",
+      name: "eyes",
+    });
+    expect(gitHub.unreact).toHaveBeenCalledWith({
+      ...reaction,
+      content: "eyes",
+    });
+    expect(gitHub.react).toHaveBeenCalledWith({ ...reaction, content: "+1" });
+    expect(gitHub.comment).toHaveBeenCalledWith({
+      repository: "pakgin/scratch",
+      issueNumber: 7,
+      text: "Fixed.",
+      dedupeKey: "report:4:github",
+    });
+    expect(store.outbox.pending()).toEqual([]);
+  });
+
+  it("doesn't post a GitHub comment again when a retry finds the earlier attempt landed", async () => {
+    const { clock, delivery, sender, store } = setup();
+    const gitHub = {
+      comment: vi
+        .fn<OutboxGitHubDelivery["comment"]>()
+        .mockRejectedValueOnce(new Error("github: timed out")),
+      hasComment: vi.fn(async () => true),
+      react: vi.fn(async () => undefined),
+      unreact: vi.fn(async () => undefined),
+      classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
+    } satisfies OutboxGitHubDelivery;
+    store.outbox.enqueue({
+      dedupeKey: "report:4:github",
+      channel: "github:pakgin/scratch",
+      threadTs: "7",
+      message: {
+        kind: "github_comment",
+        repository: "pakgin/scratch",
+        issueNumber: 7,
+        text: "Fixed.",
+      },
+    });
+
+    sender.start(delivery, gitHub);
+    await sender.drain();
+    clock.now += 60_000;
+    await sender.drain();
+
+    expect(gitHub.comment).toHaveBeenCalledOnce();
+    expect(gitHub.hasComment).toHaveBeenCalledOnce();
+    expect(store.outbox.pending()).toEqual([]);
+  });
+
+  it("doesn't start a GitHub comment when stopped while checking an interrupted one", async () => {
+    const { delivery, sender, store } = setup();
+    const lookup = Promise.withResolvers<boolean>();
+    const gitHub = {
+      comment: vi.fn(async () => undefined),
+      hasComment: vi.fn(() => lookup.promise),
+      react: vi.fn(async () => undefined),
+      unreact: vi.fn(async () => undefined),
+      classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
+    } satisfies OutboxGitHubDelivery;
+    const entryId =
+      store.outbox.enqueue({
+        dedupeKey: "report:4:github",
+        channel: "github:pakgin/scratch",
+        threadTs: "7",
+        message: {
+          kind: "github_comment",
+          repository: "pakgin/scratch",
+          issueNumber: 7,
+          text: "Fixed.",
+        },
+      })?.id ?? -1;
+    store.outbox.beginAttempt(entryId);
+
+    sender.start(delivery, gitHub);
+    await vi.waitFor(() => expect(gitHub.hasComment).toHaveBeenCalledOnce());
+    const stopped = sender.stop();
+    lookup.resolve(false);
+    await stopped;
+
+    expect(gitHub.comment).not.toHaveBeenCalled();
+    expect(store.outbox.get(entryId)?.status).toBe("pending");
+  });
+
+  it("gives up on a GitHub entry when there's no GitHub account to deliver it with", async () => {
+    const { delivery, logger, sender, store } = setup();
+    store.outbox.enqueue({
+      dedupeKey: "ack:github:comment:31",
+      channel: "github:pakgin/scratch",
+      threadTs: "7",
+      message: {
+        kind: "github_reaction",
+        repository: "pakgin/scratch",
+        subject: "issue-comment",
+        subjectId: 31,
+        content: "eyes",
+      },
+    });
+
+    sender.start(delivery);
+    await sender.drain();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      "outbox: gave up on ack:github:comment:31: no GitHub account to deliver it with",
+    );
   });
 });

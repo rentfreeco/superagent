@@ -3,6 +3,7 @@ import path from "node:path";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { splitShellCommands } from "../utils/split-shell-commands.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 
 export interface WorkerGuardOptions {
   worktreePath: string;
@@ -10,6 +11,8 @@ export interface WorkerGuardOptions {
   gitDirectory: string;
   baseBranch: string;
   homeDirectory: string;
+  /** The task's pull request, once it has one: the worker answers there only through its report. */
+  pullRequest?: () => TaskPullRequest | undefined;
 }
 
 const CREDENTIAL_DIRECTORIES = [
@@ -28,7 +31,14 @@ const FILE_WRITING_TOOLS = new Set([
   "NotebookEdit",
 ]);
 const SEARCH_TOOLS = new Set(["Grep", "Glob"]);
-const GH_OPTIONS_WITH_VALUES = new Set(["-R", "--repo"]);
+const GH_OPTIONS_WITH_VALUES = new Set([
+  "-R",
+  "--repo",
+  "-b",
+  "--body",
+  "-F",
+  "--body-file",
+]);
 const GIT_OPTIONS_WITH_VALUES = new Set([
   "-C",
   "-c",
@@ -52,6 +62,10 @@ const DELETE_REFUSAL =
 const FORCE_PUSH_REFUSAL =
   "Force pushes are refused. Use --force-with-lease on your own branch if you must rewrite it.";
 const DELETE_BRANCH_REFUSAL = "Deleting remote branches is refused.";
+const COMMENT_REFUSAL =
+  "Your report is your answer on the pull request: it's posted there for [github] messages, so a comment of your own would say it twice. Reply only in a review comment's thread, then report.";
+const GH_API_FIELD_OPTION =
+  /^(?:-[fF]|--field|--raw-field|--input)(?:=|$)|^-[fF]\S/;
 const READ_REFUSAL = "Reading credential files is refused.";
 const SEARCH_REFUSAL =
   "Searching a directory that holds credential files is refused. Search inside your worktree.";
@@ -93,8 +107,103 @@ const positionals = (
 ): string[] =>
   positionalIndexes(args, optionsWithValues).map((index) => args[index] ?? "");
 
-const ghRefusal = (args: readonly string[]): string | undefined => {
-  const [group, action] = positionals(args, GH_OPTIONS_WITH_VALUES);
+const GH_API_REFUSALS: readonly (readonly [RegExp, string])[] = [
+  [
+    /\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/,
+    MERGE_REFUSAL,
+  ],
+  [/\bevent\s*[=:]\s*"?APPROVE\b/, APPROVE_REFUSAL],
+  [
+    /\bcloseIssue\b|\/issues\/\d+\b.*\bstate\s*[=:]\s*"?closed\b/,
+    CLOSE_REFUSAL,
+  ],
+];
+
+/** The value of an option given as `--name value`, `--name=value`, or `-Nvalue`. */
+const optionValue = (
+  args: readonly string[],
+  names: readonly string[],
+): string | undefined => {
+  for (const [index, arg] of args.entries()) {
+    if (names.includes(arg)) return args[index + 1];
+    for (const name of names) {
+      const prefix = name.startsWith("--") ? `${name}=` : name;
+      if (arg.startsWith(prefix) && arg.length > prefix.length) {
+        return arg.slice(prefix.length);
+      }
+    }
+  }
+  return undefined;
+};
+
+/** gh api writes when its method isn't GET; without one, when it sends fields or an input file. */
+const isGhApiWrite = (args: readonly string[]): boolean => {
+  const method = optionValue(args, ["-X", "--method"]);
+  return method === undefined
+    ? args.some((arg) => GH_API_FIELD_OPTION.test(arg))
+    : method.toUpperCase() !== "GET";
+};
+
+/** `owner/name`, or `HOST/owner/name` as gh's --repo takes it. */
+const isRepository = (named: string, repository: string): boolean => {
+  const lowerNamed = named.toLowerCase();
+  const lowerRepository = repository.toLowerCase();
+  return (
+    lowerNamed === lowerRepository || lowerNamed.endsWith(`/${lowerRepository}`)
+  );
+};
+
+const ghApiRefusal = (
+  args: readonly string[],
+  pullRequest: TaskPullRequest | undefined,
+): string | undefined => {
+  const request = args.join(" ");
+  const lowerRequest = request.toLowerCase();
+  const isTaskCommentList =
+    pullRequest !== undefined &&
+    [pullRequest.repository, "{owner}/{repo}"].some((repository) =>
+      lowerRequest.includes(
+        `repos/${repository.toLowerCase()}/issues/${pullRequest.number}/comments`,
+      ),
+    );
+  if (isTaskCommentList && isGhApiWrite(args)) return COMMENT_REFUSAL;
+  return GH_API_REFUSALS.find(([pattern]) => pattern.test(request))?.[1];
+};
+
+/**
+ * Whether a gh pr or issue command names the task's pull request: by
+ * number or URL in the task's repo, or by nothing, which means the
+ * current branch's.
+ */
+const namesTaskPullRequest = (
+  args: readonly string[],
+  group: string | undefined,
+  selector: string | undefined,
+  { repository, number }: TaskPullRequest,
+): boolean => {
+  const repoOption = optionValue(args, ["-R", "--repo"]);
+  if (repoOption !== undefined && !isRepository(repoOption, repository)) {
+    return false;
+  }
+  if (selector === undefined) return group === "pr";
+  const [, urlRepository, urlNumber] =
+    selector.match(
+      /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/,
+    ) ?? [];
+  if (urlRepository !== undefined) {
+    return (
+      isRepository(urlRepository, repository) && Number(urlNumber) === number
+    );
+  }
+  return selector === String(number) || selector === `#${number}`;
+};
+
+const ghRefusal = (
+  args: readonly string[],
+  pullRequest: TaskPullRequest | undefined,
+): string | undefined => {
+  const [group, action, selector] = positionals(args, GH_OPTIONS_WITH_VALUES);
+  if (group === "api") return ghApiRefusal(args, pullRequest);
   if (group === "pr" && action === "merge") return MERGE_REFUSAL;
   if (
     group === "pr" &&
@@ -106,6 +215,16 @@ const ghRefusal = (args: readonly string[]): string | undefined => {
   if (group === "issue" && action === "close") return CLOSE_REFUSAL;
   if ((group === "repo" || group === "release") && action === "delete") {
     return DELETE_REFUSAL;
+  }
+  const isComment =
+    (group === "pr" && (action === "comment" || action === "review")) ||
+    (group === "issue" && action === "comment");
+  if (
+    isComment &&
+    pullRequest !== undefined &&
+    namesTaskPullRequest(args, group, selector, pullRequest)
+  ) {
+    return COMMENT_REFUSAL;
   }
   return undefined;
 };
@@ -152,8 +271,9 @@ const gitRefusal = (
 
 const commandRefusal = (
   command: string,
-  baseBranch: string,
+  { baseBranch, pullRequest }: WorkerGuardOptions,
 ): string | undefined => {
+  const taskPullRequest = pullRequest?.();
   // Any word of a command can start the gh or git it runs, after a keyword
   // (if, do, !), a wrapper and its options (env -i, sudo -u bot, xargs), or a
   // VAR=value prefix, so every position is checked. An unquoted mention, such
@@ -164,7 +284,7 @@ const commandRefusal = (
       const args = words.slice(index + 1);
       const refusal =
         program === "gh"
-          ? ghRefusal(args)
+          ? ghRefusal(args, taskPullRequest)
           : program === "git"
             ? gitRefusal(args, baseBranch)
             : undefined;
@@ -257,7 +377,7 @@ export const refusalFor = async (
   if (toolName === "Bash") {
     const command = commandInputSchema.safeParse(toolInput);
     return command.success
-      ? commandRefusal(command.data.command, options.baseBranch)
+      ? commandRefusal(command.data.command, options)
       : undefined;
   }
   const files = fileInputSchema.safeParse(toolInput);
