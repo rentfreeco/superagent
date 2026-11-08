@@ -141,29 +141,51 @@ describe("recordReport", () => {
     expect(store.tasks.get(task.id)?.prNumber).toBe(42);
   });
 
-  it("records a report answered on GitHub without posting it in Slack", () => {
-    const { queuedPosts, report, store, task } = setup();
+  it("posts a report answering GitHub messages on the pull request instead of in Slack", () => {
+    const { store, task } = setup();
 
-    expect(
-      report({
-        state: "ready",
-        summary: "Renamed it, as asked on the pull request.",
-        prUrl: "https://github.com/pakgin/superagent/pull/42",
-        answeredOnGitHub: true,
-      }),
-    ).toEqual({
+    const outcome = recordReport({
+      store,
+      taskId: task.id,
+      report: {
+        state: "waiting",
+        summary: "Renamed it, as asked.",
+        question: "Should the old name stay as an alias?",
+      },
+      destinations: {
+        slack: false,
+        pullRequest: { repository: "pakgin/superagent", number: 42 },
+      },
+    });
+
+    expect(outcome).toEqual({
       isAccepted: true,
       reply:
-        "Recorded without a Slack post, since you answered on GitHub. End your turn now.",
+        "Posted on the pull request, where the messages came from. End your turn now.",
     });
-    expect(store.tasks.get(task.id)).toMatchObject({
-      state: "ready",
-      prNumber: 42,
-    });
-    expect(store.reports.latest(task.id)?.summary).toBe(
-      "Renamed it, as asked on the pull request.",
-    );
-    expect(queuedPosts()).toEqual([]);
+    expect(store.tasks.get(task.id)?.state).toBe("waiting");
+    expect(
+      store.outbox
+        .pending()
+        .map(({ dedupeKey, channel, threadTs, message }) => ({
+          dedupeKey,
+          channel,
+          threadTs,
+          message,
+        })),
+    ).toEqual([
+      {
+        dedupeKey: expect.stringMatching(/^report:\d+:github$/),
+        channel: "github:pakgin/superagent",
+        threadTs: "42",
+        message: {
+          kind: "github_comment",
+          repository: "pakgin/superagent",
+          issueNumber: 42,
+          text: "Renamed it, as asked.\n\n**Question:** Should the old name stay as an alias?",
+        },
+      },
+    ]);
   });
 
   it("turns down a report once the task isn't running, so a stopped task stays quiet", () => {

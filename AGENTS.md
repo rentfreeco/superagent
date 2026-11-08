@@ -58,7 +58,8 @@ packages/
                                events with catchup:<channel>:<ts> IDs
         thread.ts              fetchThread: conversations.replies with cursor pagination
         delivery.ts            postMessage (dedupe key in message metadata), addReaction,
-                               findOwnPost, and which Slack errors are permanent
+                               removeReaction, findOwnPost, and which Slack errors are
+                               permanent
         index.ts               the module's public exports
       store/                   @repo/core/store: everything the service needs after a restart
         open-store.ts          openStore: pragmas, the write-ahead-log check, migrations
@@ -69,7 +70,9 @@ packages/
         tasks.ts               tasks and TASK_TRANSITIONS, the one task state machine
         inputs.ts              what each worker has been told, deduped by (source, ref)
         reports.ts             what each worker last said
-        outbox.ts              what must reach Slack, with dedupe keys and retry backoff
+        outbox.ts              what must reach Slack or GitHub, with dedupe keys and retry
+                               backoff; a GitHub entry's channel is github:<owner/name>
+                               and its thread the pull request's number
         kv.ts                  JSON values by key, read back through a zod schema
         candidates.ts          owner messages no task owns, waiting for the router, once per
                                message and once more per task that hands one back
@@ -77,7 +80,8 @@ packages/
                                the fallback; at most one per candidate
         open-test-store.ts     an in-memory store with a settable clock, for tests
       github/                  @repo/core/github: superagent's own GitHub account
-        client.ts              createGitHubClient: GET with the token, answers parsed with zod
+        client.ts              createGitHubClient: GET, POST, and DELETE with the token,
+                               answers parsed with zod, GitHubRequestError with the status
         resolve-agent-account.ts resolveAgentAccount: whose the token is, refusing the
                                owner's own, with the noreply address commits are authored with
         agent-account-environment.ts agentAccountEnvironment: gh, git pushes, and commit
@@ -88,10 +92,16 @@ packages/
                                inputs, notices, whether the task is over, the new position out
         pull-request-watcher.ts createPullRequestWatcher: every minute, each task's pull request,
                                written in one transaction; the position in kv
+        pull-request-input-subject.ts pullRequestInputSubject: the comment behind a [github]
+                               input's ref, which can take a reaction
+        outbox-delivery.ts     createGitHubDelivery: the outbox sender's GitHub side, as the
+                               agent: comments carrying a hidden dedupe marker, reactions on
+                               and off, which failures are permanent
         index.ts               the module's public exports
-      outbox/                  @repo/core/outbox: turns outbox rows into Slack posts
+      outbox/                  @repo/core/outbox: turns outbox rows into Slack and GitHub writes
         sender.ts              createOutboxSender: one pass at a time, woken on enqueue and
-                               polled every second; checks before re-posting; stops cleanly
+                               polled every second; each kind to Slack or GitHub; checks
+                               before re-posting; stops cleanly
         index.ts               the module's public exports
       recovery/                @repo/core/recovery: what runs once on every start
         recover.ts             recoverAfterRestart: replay unfinished events, tell running
@@ -130,12 +140,19 @@ packages/
         claude-session.ts      createClaudeSessionStarter: one Agent SDK query per session, fed
                                inputs as streamed prompts; the ack, read_thread, report,
                                hand_back, and nothing_to_report MCP tools
-        acknowledge-messages.ts acknowledgeMessages: the worker's ack, an 👀 on each Slack
-                               message it was given and hasn't finished, as ack:<event_id>
+        acknowledge-messages.ts acknowledgeMessages: the worker's ack, an 👀 on each message
+                               it was given and hasn't finished, in Slack or on GitHub, as
+                               ack:<ref>
+        finish-acknowledgements.ts finishAcknowledgements: at the end of a turn that didn't
+                               fail, 👀 off and ✅ on in Slack (👍 on GitHub) for each message
+                               it read, as unack:<ref> and done:<ref>
+        message-reactions.ts   messageReactionEntry: the outbox entry for a reaction on the
+                               message behind an input, a Slack event or a pull request comment
         read-task-thread.ts    readTaskThread: the worker's read_thread, the owner's and the
                                bot's messages in the task's thread, newest that fit
-        record-report.ts       recordReport: the report row, the state change, and the thread
-                               post, in one transaction
+        record-report.ts       recordReport: the report row, the state change, and the post
+                               where its messages came from (Slack, the pull request, or
+                               both), in one transaction
         hand-back-message.ts   handBackMessage: the worker's hand_back, the message it names as
                                a router candidate naming the task and why
         tool-outcome.ts        ToolOutcome, what a worker or router tool answers, and
@@ -224,7 +241,7 @@ All state the service needs after a restart lives in `@repo/core/store`, one SQL
 - MUST: Never edit a migration that has shipped. Add a new one to the end of `MIGRATIONS`.
 - MUST: Keep transactions synchronous and short. `store.transaction` refuses async work, and the whole store is synchronous.
 - NEVER: open the same store from two processes, or keep it on a network filesystem. `openStore` refuses to run unless SQLite really switched to write-ahead logging.
-- MUST: Every Slack post and reaction goes through `store.outbox`. Only the outbox sender calls `SlackGateway.post` or `react`.
+- MUST: Every Slack post and reaction, and every comment and reaction the service makes on GitHub, goes through `store.outbox`. Only the outbox sender calls `SlackGateway.post`, `react`, or `unreact`, or the GitHub delivery. Workers' own `gh` calls are theirs, not the service's.
 - MUST: Queue an outbox entry in the same transaction as the event disposition or row change that caused it, with a dedupe key built from that cause (`reply:<event_id>`, `report:<report_id>`), so handling the same thing twice queues one post.
 - MUST: Keep message handling safe to run twice. Restart recovery replays every event still `received`, so a handler, and any decision, must give the same result when it sees an event it may already have half-handled.
 - MUST: Take the recovery snapshot (`takeRecoverySnapshot`) before connecting to Slack, and recover only from it. Once connected, live events are recorded, including the bot's own posts echoed back by Slack. An event the live gate is still handling is also `received`, so replaying it would handle it twice, and any newer event moves a conversation's latest ts past the messages catch-up has to read.
@@ -236,7 +253,9 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 
 - MUST: Reach a worker only through rows. A handler adds an input (`store.inputs`) or changes the task's state and wakes the runner; it never touches a session.
 - An input is delivered when the runner sends it into a session, and read when a turn's result lists its prompt. A session started or resumed gets every unread input, so nothing sent before a crash is lost; it may see one twice.
-- A worker has five tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages and GitHub comments it was given and hasn't finished, `read_thread` reads the task's thread, `report` posts where the task stands (or only records it, with `answeredOnGitHub`), `hand_back` gives the router a message that isn't about the task, and `nothing_to_report` ends a turn that only handed messages back. Nothing reacts to or answers the owner until the worker does.
+- A worker has five tools, on the in-process `superagent` MCP server: `ack` puts 👀 on the Slack messages and GitHub comments it was given and hasn't finished, `read_thread` reads the task's thread, `report` posts where the task stands, where the messages it answers came from, `hand_back` gives the router a message that isn't about the task, and `nothing_to_report` ends a turn that only handed messages back. Nothing reacts to or answers the owner until the worker does.
+- When a turn that didn't fail ends, the runner swaps 👀 for ✅ on each Slack message it read, and for 👍 on each GitHub comment, since GitHub has no check mark. A message the worker handed back is left for the router. A failed turn leaves 👀 in place.
+- The runner, not the worker, decides where a report goes: the inputs its session was given since the last accepted report, less any handed back. Slack messages are answered in the Slack thread, `[github]` ones with a comment on the pull request, and a turn with both gets both. The idle-turn fallback goes the same way; failures go to Slack.
 - MUST: Show a worker only the owner's messages and the bot's own. `read_thread` leaves out everyone else's, since the owner gate is the only access control and workers run unattended.
 - MUST: Post what a worker says only through `recordReport`. It turns down a report for a task that isn't `running`, which is what keeps a stopped task quiet.
 - A task that has reported goes back to `running` when its session ends a turn with another one queued (a follow-up arrived before the report) or when its worker reports again (a follow-up was folded in after the report). A `stopped` task never goes back this way; only the owner's next message, through a new launch, resumes it.
@@ -273,7 +292,8 @@ With superagent's own GitHub account set (`SUPERAGENT_GITHUB_TOKEN`), the pull r
 - A pull request is the task's only on `agent/<task id>` in the task's repo. `recordReport` refuses a URL in another repo; the first poll marks a pull request off the branch, or from a fork, as foreign, tells the owner once, and never reads it again.
 - A merge or close posts once and calls `closeTask`, which drops unread inputs and moves the task to done from any state. A live session ends at its next turn.
 - CI and bots never wake a failed or stopped task. Bots get `PULL_REQUEST_MAX_BOT_ROUNDS` rounds per pull request, so an automated reviewer such as Greptile, which reviews every push, can't loop with the worker. A comment longer than `PULL_REQUEST_INPUT_MAX_LENGTH` is cut short with a note to read the rest with `gh`.
-- MUST: Answer GitHub on GitHub. A worker acks `[github]` messages (👀 on the comment, as the agent; reviews and check runs can't take a reaction), replies in the review comment's thread or with `gh pr comment`, and reports with `answeredOnGitHub`, which records the state without a Slack post. The owner shouldn't have to switch places to follow a conversation.
+- MUST: Answer GitHub on GitHub. A worker acks `[github]` messages (👀 on the comment, as the agent; reviews and check runs can't take a reaction), resolves a review thread it fixed or replies in it to decline, and its report on them is posted on the pull request, not in Slack. The owner shouldn't have to switch places to follow a conversation.
+- A GitHub comment from the outbox carries `<!-- superagent:<dedupe key> -->`. Before posting an entry attempted before, the sender looks for the agent's comment with that marker, so a crash after GitHub took the comment doesn't post it twice.
 - The guard refuses merges, approvals, and closing issues through `gh api` too, including GraphQL `mergePullRequest` and `enablePullRequestAutoMerge`, since workers use `gh api` to resolve review threads and reply to comments.
 
 ## Slack

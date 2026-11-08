@@ -24,6 +24,9 @@ export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
 export const TASK_TITLE_MAX_LENGTH = 80;
 export const TASK_ACK_REACTION = "eyes";
+export const TASK_DONE_REACTION = "white_check_mark";
+/** GitHub's reactions have no check mark, so a finished comment gets a thumbs-up, as Greptile does. */
+export const GITHUB_DONE_REACTION = "+1";
 export const TASK_STOP_REACTION = "octagonal_sign";
 /** What the router reacts with to a message it lets be: thanks, an acknowledgement, a greeting, or anything else. */
 export const ROUTER_IGNORE_REACTIONS = [

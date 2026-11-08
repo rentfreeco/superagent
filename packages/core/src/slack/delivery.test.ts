@@ -2,6 +2,7 @@ import { webApi } from "@slack/bolt";
 import { describe, expect, it, vi } from "vitest";
 import {
   addReaction,
+  removeReaction,
   classifyDeliveryFailure,
   findOwnPost,
   OUTBOX_METADATA_EVENT_TYPE,
@@ -88,6 +89,22 @@ describe("addReaction", () => {
     await expect(
       addReaction(client, { channel: "C1", timestamp: "1.0001", name: "eyes" }),
     ).rejects.toThrow("message_not_found");
+  });
+});
+
+describe("removeReaction", () => {
+  it("treats a reaction that is already gone as removed, and passes any other error on", async () => {
+    const remove = vi
+      .fn()
+      .mockRejectedValueOnce(slackPlatformError("no_reaction"))
+      .mockRejectedValueOnce(slackPlatformError("message_not_found"));
+    const client = { reactions: { remove } } as unknown as webApi.WebClient;
+    const reaction = { channel: "C1", timestamp: "1.0001", name: "eyes" };
+
+    await expect(removeReaction(client, reaction)).resolves.toBeUndefined();
+    await expect(removeReaction(client, reaction)).rejects.toThrow(
+      "message_not_found",
+    );
   });
 });
 

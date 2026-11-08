@@ -8,9 +8,9 @@ import type { Store } from "../store/open-store.ts";
 import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
-import { acknowledgePullRequestInputs } from "../github/acknowledge-pull-request-inputs.ts";
-import type { GitHubClient } from "../github/client.ts";
 import { acknowledgeMessages } from "./acknowledge-messages.ts";
+import { finishAcknowledgements } from "./finish-acknowledgements.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 import { handBackMessage } from "./hand-back-message.ts";
 import type {
   StartWorkerSession,
@@ -23,6 +23,7 @@ import {
   prepareWorktree as prepareGitWorktree,
 } from "./prepare-worktree.ts";
 import {
+  type ReportDestinations,
   recordReport,
   REPORT_STATES,
   type WorkerReport,
@@ -57,8 +58,6 @@ export interface TaskRunnerOptions {
   prepareWorktree?: PrepareWorktree;
   maxSessions?: number;
   pollIntervalMs?: number;
-  /** The agent's GitHub client; ack puts 👀 on GitHub comments with it. */
-  gitHubClient?: GitHubClient | undefined;
 }
 
 export interface TaskRunner {
@@ -75,6 +74,10 @@ interface LiveSession {
   hasHandedBackThisTurn: boolean;
   /** Whether the worker said the current turn has nothing to report. */
   hasNothingToReport: boolean;
+  /** Inputs this session was given since the worker's last accepted report, for where the next one goes. */
+  deliveredSinceReport: Set<number>;
+  /** Inputs the worker handed back, which the router answers instead. */
+  handedBackInputIds: Set<number>;
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -101,11 +104,9 @@ export const createTaskRunner = ({
   ownerUserId,
   prepareWorktree = prepareGitWorktree,
   maxSessions = TASK_MAX_SESSIONS,
-  gitHubClient,
   pollIntervalMs = TASK_RUNNER_POLL_INTERVAL_MS,
 }: TaskRunnerOptions): TaskRunner => {
   const liveSessions = new Map<string, LiveSession>();
-  const acknowledgedGitHubRefs = new Set<string>();
   const launchingTaskIds = new Set<string>();
   const launches = new Set<Promise<void>>();
   let isRunning = false;
@@ -139,44 +140,41 @@ export const createTaskRunner = ({
     return true;
   };
 
-  const acknowledgeOnGitHub = async (taskId: string): Promise<number> => {
+  const repositoryOf = (taskId: string): string | undefined =>
+    repos.get(store.tasks.get(taskId)?.repo ?? "")?.github;
+
+  const pullRequestOf = (taskId: string): TaskPullRequest | undefined => {
     const repository = repositoryOf(taskId);
-    if (gitHubClient === undefined || repository === undefined) return 0;
-    const refs = store.inputs
-      .unread(taskId)
-      .filter(
-        ({ source, ref, deliveredAt }) =>
-          source === "github" &&
-          ref !== null &&
-          deliveredAt !== null &&
-          !acknowledgedGitHubRefs.has(ref),
-      )
-      .map(({ ref }) => ref ?? "");
-    try {
-      const acknowledged = await acknowledgePullRequestInputs({
-        client: gitHubClient,
-        repository,
-        refs,
-      });
-      for (const ref of acknowledged) acknowledgedGitHubRefs.add(ref);
-      return acknowledged.length;
-    } catch (error) {
-      logger.error(
-        `tasks: putting 👀 on ${taskId}'s GitHub comments failed: ${describeError(error)}`,
-      );
-      return 0;
-    }
+    const number = store.tasks.get(taskId)?.prNumber;
+    return repository === undefined || number === null || number === undefined
+      ? undefined
+      : { repository, number };
   };
 
   const acknowledge = async (taskId: string): Promise<string> => {
-    const slackCount = acknowledgeMessages({ store, taskId });
-    if (slackCount > 0) wakeOutbox();
-    const gitHubCount = await acknowledgeOnGitHub(taskId);
-    return describeAcknowledgement(slackCount + gitHubCount);
+    const acknowledgedCount = acknowledgeMessages({
+      store,
+      taskId,
+      pullRequest: pullRequestOf(taskId),
+    });
+    if (acknowledgedCount > 0) wakeOutbox();
+    return describeAcknowledgement(acknowledgedCount);
   };
 
-  const repositoryOf = (taskId: string): string | undefined =>
-    repos.get(store.tasks.get(taskId)?.repo ?? "")?.github;
+  /** Slack for Slack messages, the pull request for GitHub ones, Slack when there were neither. */
+  const reportDestinations = (
+    taskId: string,
+    inputIds: Iterable<number>,
+  ): ReportDestinations => {
+    const sources = new Set(
+      [...inputIds].map((inputId) => store.inputs.get(inputId)?.source),
+    );
+    const isFromSlack = sources.has("slack") || sources.has("router");
+    const pullRequest = sources.has("github")
+      ? pullRequestOf(taskId)
+      : undefined;
+    return { slack: isFromSlack || pullRequest === undefined, pullRequest };
+  };
 
   const handBack = (
     taskId: string,
@@ -186,7 +184,11 @@ export const createTaskRunner = ({
     const outcome = handBackMessage({ store, taskId, inputId, reason });
     if (!outcome.isAccepted) return outcome;
     const live = liveSessions.get(taskId);
-    if (live !== undefined) live.hasHandedBackThisTurn = true;
+    if (live !== undefined) {
+      live.hasHandedBackThisTurn = true;
+      live.handedBackInputIds.add(inputId);
+      live.deliveredSinceReport.delete(inputId);
+    }
     wakeRouter();
     return outcome;
   };
@@ -223,6 +225,7 @@ export const createTaskRunner = ({
   const postReport = (
     taskId: string,
     workerReport: WorkerReport,
+    destinations?: ReportDestinations,
   ): ToolOutcome =>
     settleReport(
       recordReport({
@@ -230,6 +233,7 @@ export const createTaskRunner = ({
         taskId,
         report: workerReport,
         repository: repositoryOf(taskId),
+        destinations,
       }),
     );
 
@@ -237,6 +241,7 @@ export const createTaskRunner = ({
     taskId: string,
     workerReport: WorkerReport,
   ): ToolOutcome => {
+    const live = liveSessions.get(taskId);
     const outcome = settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
@@ -245,9 +250,14 @@ export const createTaskRunner = ({
           taskId,
           report: workerReport,
           repository: repositoryOf(taskId),
+          destinations: reportDestinations(
+            taskId,
+            live?.deliveredSinceReport ?? [],
+          ),
         });
       }),
     );
+    if (outcome.isAccepted) live?.deliveredSinceReport.clear();
     return outcome;
   };
 
@@ -258,6 +268,7 @@ export const createTaskRunner = ({
       reopenReportedTask(taskId);
       store.inputs.markDelivered(inputs.map(({ id }) => id));
     });
+    for (const { id } of inputs) live.deliveredSinceReport.add(id);
     live.session.send(inputs);
   };
 
@@ -268,6 +279,16 @@ export const createTaskRunner = ({
   ): void => {
     store.inputs.markRead(turn.readInputIds);
     if (live.isEnding) return;
+    if (!turn.isError) {
+      const finishedCount = finishAcknowledgements({
+        store,
+        inputIds: turn.readInputIds.filter(
+          (inputId) => !live.handedBackInputIds.has(inputId),
+        ),
+        pullRequest: pullRequestOf(taskId),
+      });
+      if (finishedCount > 0) wakeOutbox();
+    }
     const { hasNothingToReport } = live;
     live.hasHandedBackThisTurn = false;
     live.hasNothingToReport = false;
@@ -284,25 +305,25 @@ export const createTaskRunner = ({
       live.session.end();
       return;
     }
-    postReport(
-      taskId,
-      turn.isError
-        ? {
-            state: "failed",
-            summary: fallbackSummary(
-              turn.resultText,
-              "The worker's turn failed.",
-            ),
-          }
-        : {
-            state: "waiting",
-            summary: fallbackSummary(
-              turn.resultText,
-              "The worker ended its turn without a report.",
-            ),
-            question: "How should I go on?",
-          },
-    );
+    if (turn.isError) {
+      postReport(taskId, {
+        state: "failed",
+        summary: fallbackSummary(turn.resultText, "The worker's turn failed."),
+      });
+    } else {
+      postReport(
+        taskId,
+        {
+          state: "waiting",
+          summary: fallbackSummary(
+            turn.resultText,
+            "The worker ended its turn without a report.",
+          ),
+          question: "How should I go on?",
+        },
+        reportDestinations(taskId, live.deliveredSinceReport),
+      );
+    }
     live.isEnding = true;
     live.session.end();
   };
@@ -408,6 +429,8 @@ export const createTaskRunner = ({
         isEnding: false,
         hasHandedBackThisTurn: false,
         hasNothingToReport: false,
+        deliveredSinceReport: new Set(inputs.map(({ id }) => id)),
+        handedBackInputIds: new Set(),
       };
       liveSessions.set(task.id, live);
       logger.info(

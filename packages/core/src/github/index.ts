@@ -3,7 +3,16 @@ export {
   createGitHubClient,
   type GitHubClient,
   type GitHubClientOptions,
+  GitHubRequestError,
 } from "./client.ts";
+export {
+  createGitHubDelivery,
+  type GitHubDeliveryOptions,
+} from "./outbox-delivery.ts";
+export {
+  pullRequestInputSubject,
+  type PullRequestInputSubject,
+} from "./pull-request-input-subject.ts";
 export {
   createPullRequestWatcher,
   pullRequestPositionKey,

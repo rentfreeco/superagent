@@ -210,7 +210,7 @@ export const createReadThreadTool = (
 export const createReportTool = (report: WorkerSessionOptions["report"]) =>
   tool(
     "report",
-    "Say where the task stands. It posts to the task's Slack thread, unless you answered on GitHub (answeredOnGitHub), and nothing else you write reaches Slack.",
+    "Say where the task stands. It's posted where the messages you're answering came from: the task's Slack thread for Slack messages, the pull request for [github] ones.",
     {
       state: z
         .enum(REPORT_STATES)
@@ -227,12 +227,6 @@ export const createReportTool = (report: WorkerSessionOptions["report"]) =>
         .optional()
         .describe(
           "For ready: the pull request's URL, as gh pr create prints it.",
-        ),
-      answeredOnGitHub: z
-        .boolean()
-        .optional()
-        .describe(
-          "true when this turn only answered [github] messages and you already answered them on GitHub: the task's state is updated without a Slack post.",
         ),
     },
     async (workerReport) => toToolResult(report(workerReport)),

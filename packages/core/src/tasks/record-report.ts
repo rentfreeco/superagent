@@ -1,5 +1,6 @@
 import type { Store } from "../store/open-store.ts";
 import type { TaskState } from "../store/tasks.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
 
 export const REPORT_STATES = [
@@ -17,8 +18,13 @@ export interface WorkerReport {
   summary: string;
   question?: string | undefined;
   prUrl?: string | undefined;
-  /** The worker answered on GitHub, so nothing is posted in Slack. */
-  answeredOnGitHub?: boolean | undefined;
+}
+
+/** Where a report is posted: where the messages it answers came from. */
+export interface ReportDestinations {
+  slack: boolean;
+  /** Post it on this pull request too, for messages that came from GitHub. */
+  pullRequest: TaskPullRequest | undefined;
 }
 
 export interface RecordReportOptions {
@@ -27,12 +33,19 @@ export interface RecordReportOptions {
   report: WorkerReport;
   /** The task's repo, owner/name; a pull request elsewhere isn't the task's. */
   repository?: string | undefined;
+  /** Slack alone unless given. */
+  destinations?: ReportDestinations | undefined;
 }
 
-const ACCEPTED_REPLY =
-  "Posted to the Slack thread. End your turn now. If the owner replies, it arrives as your next message.";
-const ANSWERED_ON_GITHUB_REPLY =
-  "Recorded without a Slack post, since you answered on GitHub. End your turn now.";
+const ACCEPTED_REPLIES = {
+  slack:
+    "Posted to the Slack thread. End your turn now. If the owner replies, it arrives as your next message.",
+  pullRequest:
+    "Posted on the pull request, where the messages came from. End your turn now.",
+  both: "Posted to the Slack thread and on the pull request, where the messages came from. End your turn now.",
+};
+
+const SLACK_ONLY: ReportDestinations = { slack: true, pullRequest: undefined };
 
 const PULL_REQUEST_URL =
   /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/;
@@ -70,6 +83,24 @@ const findProblem = (
   return undefined;
 };
 
+const describeReportForGitHub = ({
+  state,
+  summary,
+  question,
+}: WorkerReport): string => {
+  switch (state) {
+    case "waiting":
+      return `${summary}\n\n**Question:** ${question}`;
+    case "blocked":
+      return `**Blocked:** ${summary}`;
+    case "failed":
+      return `**Failed:** ${summary}`;
+    case "ready":
+    case "done":
+      return summary;
+  }
+};
+
 const describeReport = ({
   state,
   summary,
@@ -95,6 +126,7 @@ export const recordReport = ({
   taskId,
   report,
   repository,
+  destinations = SLACK_ONLY,
 }: RecordReportOptions): ToolOutcome =>
   store.transaction(() => {
     const problem = findProblem(report, repository);
@@ -116,14 +148,35 @@ export const recordReport = ({
     const prNumber = readPullRequestNumber(report.prUrl);
     if (prNumber !== undefined) store.tasks.update(taskId, { prNumber });
     store.tasks.transition(taskId, report.state);
-    if (report.answeredOnGitHub) {
-      return { isAccepted: true, reply: ANSWERED_ON_GITHUB_REPLY };
+    const { pullRequest } = destinations;
+    if (destinations.slack) {
+      store.outbox.enqueue({
+        dedupeKey: `report:${savedReport.id}`,
+        channel: task.originChannel,
+        threadTs: task.originTs,
+        message: { kind: "post", text: describeReport(report) },
+      });
     }
-    store.outbox.enqueue({
-      dedupeKey: `report:${savedReport.id}`,
-      channel: task.originChannel,
-      threadTs: task.originTs,
-      message: { kind: "post", text: describeReport(report) },
-    });
-    return { isAccepted: true, reply: ACCEPTED_REPLY };
+    if (pullRequest !== undefined) {
+      store.outbox.enqueue({
+        dedupeKey: `report:${savedReport.id}:github`,
+        channel: `github:${pullRequest.repository}`,
+        threadTs: String(pullRequest.number),
+        message: {
+          kind: "github_comment",
+          repository: pullRequest.repository,
+          issueNumber: pullRequest.number,
+          text: describeReportForGitHub(report),
+        },
+      });
+    }
+    return {
+      isAccepted: true,
+      reply:
+        pullRequest === undefined
+          ? ACCEPTED_REPLIES.slack
+          : destinations.slack
+            ? ACCEPTED_REPLIES.both
+            : ACCEPTED_REPLIES.pullRequest,
+    };
   });

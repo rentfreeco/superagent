@@ -13,7 +13,6 @@ import type {
 } from "./claude-session.ts";
 import type { PrepareWorktree } from "./prepare-worktree.ts";
 import { createTaskRunner, type TaskRunner } from "./runner.ts";
-import type { GitHubClient } from "../github/client.ts";
 
 const superagentRepo: Repo = {
   name: "superagent",
@@ -64,12 +63,7 @@ const setup = ({
     branch: `agent/${taskId}`,
     path: `/data/worktrees/${taskId}`,
   })),
-  gitHubClient,
-}: {
-  maxSessions?: number;
-  prepareWorktree?: PrepareWorktree;
-  gitHubClient?: GitHubClient;
-} = {}) => {
+}: { maxSessions?: number; prepareWorktree?: PrepareWorktree } = {}) => {
   const { clock, store } = openTestStore();
   const sessions: FakeSession[] = [];
   const startSession: StartWorkerSession = (options) => {
@@ -103,7 +97,6 @@ const setup = ({
     prepareWorktree,
     maxSessions,
     pollIntervalMs: 60_000,
-    gitHubClient,
   });
   runners.push(runner);
   const createTask = (state: TaskState = "queued", repo = "superagent") => {
@@ -383,19 +376,17 @@ describe("createTaskRunner", () => {
     expect(wakeRouter).toHaveBeenCalledOnce();
   });
 
-  it("puts 👀 on the GitHub comments the worker was given when it calls ack, once each, and logs a failure instead of throwing", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({ id: 1 }));
-    const { addInput, createTask, logger, sessions, startRunner, store } =
-      setup({
-        gitHubClient: {
-          get: async () => {
-            throw new Error("only posts");
-          },
-          post: async (path, body, schema) =>
-            schema.parse(await post(path, body)),
-        },
-      });
+  it("puts 👀 on the GitHub comments the worker was given through the outbox, on the task's pull request", async () => {
+    const {
+      addInput,
+      createTask,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
     const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
     addInput(task.id);
     store.inputs.add({
       taskId: task.id,
@@ -410,31 +401,141 @@ describe("createTaskRunner", () => {
       text: 'The check "test" failed.',
     });
     await startRunner(1);
-    const session = sessionAt(sessions, 0);
 
-    const first = await session.options.ack();
-    const second = await session.options.ack();
-    post.mockRejectedValueOnce(new Error("github: answered 502"));
-    store.inputs.add({
+    expect(await sessionAt(sessions, 0).options.ack()).toBe(
+      "Put 👀 on the message.",
+    );
+    expect(sendQueuedMessages()).toEqual([
+      {
+        kind: "github_reaction",
+        repository: "pakgin/superagent",
+        subject: "review-comment",
+        subjectId: 21,
+        content: "eyes",
+      },
+    ]);
+  });
+
+  it("swaps 👀 for ✅ in Slack and 👍 on GitHub once a turn finishes, but not after a failed one", async () => {
+    const {
+      addInput,
+      createTask,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
+    const request = addInput(task.id);
+    store.events.record({
+      eventId: request?.ref ?? "",
+      type: "app_mention",
+      channel: "C0MAPPED",
+      ts: "100.000002",
+      threadTs: task.originTs,
+      user: "U0OWNER",
+      text: "fix the flaky test",
+    });
+    const comment = store.inputs.add({
       taskId: task.id,
       source: "github",
       ref: "github:comment:31",
       text: "The owner commented on pull request #7.",
     });
-    store.inputs.markDelivered(
-      store.inputs.unread(task.id).map(({ id }) => id),
-    );
-    const failed = await session.options.ack();
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
 
-    expect(post.mock.calls[0]?.[0]).toBe(
-      "/repos/pakgin/superagent/pulls/comments/21/reactions",
+    session.options.events.onTurnEnd({
+      readInputIds: [request?.id ?? 0],
+      isError: true,
+      resultText: "The API is overloaded.",
+      isIdle: false,
+    });
+    const afterFailedTurn = sendQueuedMessages();
+    session.options.events.onTurnEnd({
+      readInputIds: [comment?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+
+    expect(afterFailedTurn).toEqual([]);
+    expect(sendQueuedMessages()).toEqual([
+      {
+        kind: "github_reaction_removal",
+        repository: "pakgin/superagent",
+        subject: "issue-comment",
+        subjectId: 31,
+        content: "eyes",
+      },
+      {
+        kind: "github_reaction",
+        repository: "pakgin/superagent",
+        subject: "issue-comment",
+        subjectId: 31,
+        content: "+1",
+      },
+    ]);
+    session.options.events.onTurnEnd({
+      readInputIds: [request?.id ?? 0],
+      isError: false,
+      resultText: "",
+      isIdle: false,
+    });
+    expect(sendQueuedMessages()).toEqual([
+      { kind: "reaction_removal", name: "eyes", timestamp: "100.000002" },
+      { kind: "reaction", name: "white_check_mark", timestamp: "100.000002" },
+    ]);
+  });
+
+  it("posts a report answering a GitHub comment on the pull request, and one answering Slack in Slack", async () => {
+    const {
+      addInput,
+      createTask,
+      runner,
+      sendQueuedMessages,
+      sessions,
+      startRunner,
+      store,
+    } = setup();
+    const task = createTask();
+    store.tasks.update(task.id, { prNumber: 7 });
+    const request = addInput(task.id);
+    await startRunner(1);
+    const first = sessionAt(sessions, 0);
+    first.options.report({ state: "done", summary: "It's the cache." });
+    first.options.events.onTurnEnd(
+      idleTurn({ readInputIds: [request?.id ?? 0] }),
     );
-    expect(first).toBe("Put 👀 on the message.");
-    expect(second).toBe("There's no new message to acknowledge.");
-    expect(failed).toBe("There's no new message to acknowledge.");
-    expect(logger.error).toHaveBeenCalledWith(
-      `tasks: putting 👀 on ${task.id}'s GitHub comments failed: github: answered 502`,
-    );
+    first.options.events.onEnd(undefined);
+    sendQueuedMessages();
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:comment:31",
+      text: "The owner commented on pull request #7: also clear it on deploy",
+    });
+    await runner.reconcile();
+
+    sessionAt(sessions, 1).options.report({
+      state: "ready",
+      summary: "It's cleared on deploy now.",
+      prUrl: "https://github.com/pakgin/superagent/pull/7",
+    });
+
+    expect(
+      sendQueuedMessages().filter(
+        ({ kind }) => kind === "post" || kind === "github_comment",
+      ),
+    ).toEqual([
+      {
+        kind: "github_comment",
+        repository: "pakgin/superagent",
+        issueNumber: 7,
+        text: "It's cleared on deploy now.",
+      },
+    ]);
   });
 
   it("puts 👀 on the owner's messages the worker was given when it calls ack", async () => {
@@ -625,6 +726,7 @@ describe("createTaskRunner", () => {
       createTask,
       queuedPosts,
       runner,
+      sendQueuedMessages,
       sessions,
       startRunner,
       store,
@@ -642,7 +744,9 @@ describe("createTaskRunner", () => {
     recordOwnerMessage(store, offTopic?.ref ?? "", task.originTs);
     await runner.reconcile();
     const resumed = sessionAt(sessions, 1);
-    const postsBefore = queuedPosts().length;
+    const postCount = () =>
+      queuedPosts().filter(({ message }) => message.kind === "post").length;
+    const postsBefore = postCount();
 
     resumed.options.handBack(offTopic?.id ?? 0, "It isn't about the cache.");
     const outcome = resumed.options.nothingToReport();
@@ -655,7 +759,13 @@ describe("createTaskRunner", () => {
       reply: "The task stays done, and nothing is posted. End your turn.",
     });
     expect(stateOf(store, task.id)).toBe("done");
-    expect(queuedPosts()).toHaveLength(postsBefore);
+    expect(postCount()).toBe(postsBefore);
+    expect(
+      sendQueuedMessages().filter(
+        (message) =>
+          message.kind === "reaction" && message.name === "white_check_mark",
+      ),
+    ).toEqual([]);
     expect(resumed.end).toHaveBeenCalledOnce();
   });
 

@@ -2,6 +2,7 @@ import { App, type LogLevel, webApi } from "@slack/bolt";
 import { SLACK_DELIVERY_TIMEOUT_MS } from "../constants.ts";
 import {
   addReaction,
+  removeReaction,
   classifyDeliveryFailure,
   type DeliveryFailure,
   findOwnPost,
@@ -157,6 +158,10 @@ export class SlackGateway {
 
   react(reaction: SlackReaction): Promise<void> {
     return addReaction(this.#deliveryClient, reaction);
+  }
+
+  unreact(reaction: SlackReaction): Promise<void> {
+    return removeReaction(this.#deliveryClient, reaction);
   }
 
   /** Finds this bot's post with the given dedupe key, so a retry can tell whether an earlier attempt got through. */

@@ -431,7 +431,6 @@ describe("createReportTool", () => {
         summary: "Done.",
         question: undefined,
         prUrl: undefined,
-        answeredOnGitHub: undefined,
       },
       undefined,
     );

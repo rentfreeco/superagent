@@ -7,6 +7,9 @@ const clientFor = (login: string): GitHubClient => ({
   post: async () => {
     throw new Error("resolveAgentAccount only reads");
   },
+  delete: async () => {
+    throw new Error("resolveAgentAccount only reads");
+  },
 });
 
 describe("resolveAgentAccount", () => {

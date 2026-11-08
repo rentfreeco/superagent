@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   createGitHubClient,
+  createGitHubDelivery,
   createPullRequestWatcher,
   resolveAgentAccount,
 } from "@repo/core/github";
@@ -95,7 +96,6 @@ const main = async (): Promise<void> => {
     wakeRouter: () => router.wake(),
     logger: console,
     ownerUserId: environment.slackOwnerId,
-    gitHubClient,
   });
   const routerDirectory = path.join(
     environment.dataDirectory,
@@ -158,7 +158,15 @@ const main = async (): Promise<void> => {
     store.close();
     throw error;
   });
-  outboxSender.start(slack);
+  outboxSender.start(
+    slack,
+    gitHubClient === undefined || gitHubAccount === undefined
+      ? undefined
+      : createGitHubDelivery({
+          client: gitHubClient,
+          agentLogin: gitHubAccount.login,
+        }),
+  );
   console.log(
     `superagent: connected as ${slack.identity.userId}, listening to ${environment.slackOwnerId}. Channels: ${describeChannels(channelRepos)}. Store: ${storePath}. Worktrees: ${worktreesDirectory}`,
   );

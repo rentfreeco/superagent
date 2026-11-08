@@ -110,6 +110,18 @@ export const addReaction = async (
   }
 };
 
+/** Removes the bot's reaction; one that's already gone counts as removed. */
+export const removeReaction = async (
+  client: webApi.WebClient,
+  { channel, timestamp, name }: SlackReaction,
+): Promise<void> => {
+  try {
+    await client.reactions.remove({ channel, timestamp, name });
+  } catch (error) {
+    if (platformErrorCode(error) !== "no_reaction") throw error;
+  }
+};
+
 const readDedupeKey = (metadata: unknown): string | undefined => {
   if (typeof metadata !== "object" || metadata === null) return undefined;
   const payload: unknown = Reflect.get(metadata, "event_payload");

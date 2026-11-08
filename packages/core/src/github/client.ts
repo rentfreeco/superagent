@@ -22,7 +22,21 @@ export interface GitHubClient {
     body: unknown,
     schema: Schema,
   ): Promise<z.output<Schema>>;
+  delete(path: string): Promise<void>;
 }
+
+/** GitHub answered with an error status. */
+export class GitHubRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GitHubRequestError";
+    this.status = status;
+  }
+}
+
+type Method = "GET" | "POST" | "DELETE";
 
 export const createGitHubClient = ({
   token,
@@ -30,10 +44,10 @@ export const createGitHubClient = ({
   baseUrl = GITHUB_API_URL,
 }: GitHubClientOptions): GitHubClient => {
   const request = async (
-    method: "GET" | "POST",
+    method: Method,
     path: string,
     body: unknown,
-  ): Promise<unknown> => {
+  ): Promise<Response> => {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -51,16 +65,20 @@ export const createGitHubClient = ({
         0,
         GITHUB_ERROR_BODY_MAX_LENGTH,
       );
-      throw new Error(
+      throw new GitHubRequestError(
         `github: ${method} ${path} answered ${response.status}: ${text}`,
+        response.status,
       );
     }
-    return response.json();
+    return response;
   };
   return {
     get: async (path, schema) =>
-      schema.parse(await request("GET", path, undefined)),
+      schema.parse(await (await request("GET", path, undefined)).json()),
     post: async (path, body, schema) =>
-      schema.parse(await request("POST", path, body)),
+      schema.parse(await (await request("POST", path, body)).json()),
+    delete: async (path) => {
+      await request("DELETE", path, undefined);
+    },
   };
 };

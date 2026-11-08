@@ -24,6 +24,9 @@ const fakeClient = (github: FakeGitHub, requests: string[]): GitHubClient => ({
   post: async () => {
     throw new Error("the watcher only reads");
   },
+  delete: async () => {
+    throw new Error("the watcher only reads");
+  },
   get: async (path, schema) => {
     requests.push(path);
     const number = Number(path.match(/\/(?:pulls|issues)\/(\d+)/)?.[1]);
