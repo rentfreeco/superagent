@@ -152,8 +152,12 @@ export const pullRequestFeedback = ({
   const botsMayWake = !isQuiet && seen.botRounds < PULL_REQUEST_MAX_BOT_ROUNDS;
   const describeAuthor = (author: Author, login: string) =>
     author === "owner" ? "The owner" : `${login}, an automated reviewer,`;
-  const body = (text: string) =>
-    truncateText(text.trim(), PULL_REQUEST_INPUT_MAX_LENGTH);
+  const body = (text: string) => {
+    const trimmed = text.trim();
+    return trimmed.length <= PULL_REQUEST_INPUT_MAX_LENGTH
+      ? trimmed
+      : `${truncateText(trimmed, PULL_REQUEST_INPUT_MAX_LENGTH)} (cut short: read the whole comment with gh)`;
+  };
 
   const inputs: PullRequestInput[] = [];
   let hasBotInput = false;

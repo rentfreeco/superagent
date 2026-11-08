@@ -141,6 +141,31 @@ describe("recordReport", () => {
     expect(store.tasks.get(task.id)?.prNumber).toBe(42);
   });
 
+  it("records a report answered on GitHub without posting it in Slack", () => {
+    const { queuedPosts, report, store, task } = setup();
+
+    expect(
+      report({
+        state: "ready",
+        summary: "Renamed it, as asked on the pull request.",
+        prUrl: "https://github.com/pakgin/superagent/pull/42",
+        answeredOnGitHub: true,
+      }),
+    ).toEqual({
+      isAccepted: true,
+      reply:
+        "Recorded without a Slack post, since you answered on GitHub. End your turn now.",
+    });
+    expect(store.tasks.get(task.id)).toMatchObject({
+      state: "ready",
+      prNumber: 42,
+    });
+    expect(store.reports.latest(task.id)?.summary).toBe(
+      "Renamed it, as asked on the pull request.",
+    );
+    expect(queuedPosts()).toEqual([]);
+  });
+
   it("turns down a report once the task isn't running, so a stopped task stays quiet", () => {
     const { queuedPosts, report, store, task } = setup();
     store.tasks.transition(task.id, "stopped");

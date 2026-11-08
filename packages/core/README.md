@@ -182,7 +182,7 @@ const watcher = createPullRequestWatcher({
 watcher.start(); // polls every minute; watcher.stop() on shutdown
 ```
 
-- **What reaches the worker:** the owner's reviews and comments, installed bots' (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
+- **What reaches the worker:** the owner's reviews and comments, installed bots' such as Greptile's (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. The worker answers on GitHub: 👀 on the comment, a reply in its thread (resolving it once fixed) or a pull request comment, and a report that isn't posted in Slack. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
 - **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. Anything else gets one note in the thread and is left alone.
 - **A merge or close** posts once in the thread and ends the task as done.
 - **Cost:** a quiet pull request takes one request a minute. Reviews and comments are read only when it changed, and checks only for a new head commit or while some are pending.
@@ -310,9 +310,9 @@ await taskRunner.stop(); // on shutdown: closes the sessions, and their tasks st
 - **A new request:** `startTask` queues a task that owns the thread and keeps the message as its first input. Nothing is posted until the worker acts.
 - **Starting:** the runner fetches the repo's base branch, adds a worktree on `agent/<task id>` from it, and starts a session there. The worker gets Claude Code's own system prompt and the repo's `CLAUDE.md`, plus instructions to push the branch, open a pull request with `gh`, and report.
 - **Worker tools:** the worker reaches Slack only through five tools.
-  - `ack` puts 👀 on each of your messages it has been given and hasn't finished. It is told to call it when it starts on a message.
+  - `ack` puts 👀 on each of your messages it has been given and hasn't finished, in Slack, and on GitHub for pull request comments, as the agent's account. It is told to call it when it starts on a message.
   - `read_thread` reads the task's thread, oldest first: your messages and the bot's own, the newest that fit in 40,000 characters, notices included. A newest message longer than that is cut short. Other people's messages are left out and counted.
-  - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction.
+  - `report` posts where the task stands: `ready` with the pull request's URL, `waiting` with one question, `done`, `blocked`, or `failed`, each with a short summary. `recordReport` saves it, moves the task to that state, and queues the post in the thread, in one transaction. With `answeredOnGitHub`, for a turn that answered pull request comments on GitHub, it records the state without a Slack post.
   - `hand_back` gives the router a message that isn't about the task, with why. Each Slack message reaches the worker labeled `[message N]`, and the worker names the one it means. The task's own request can't be handed back.
   - `nothing_to_report` ends a turn that only handed messages back: the task returns to where it stood, and nothing is posted. The runner refuses it in a turn without a hand-back, or before the task has reported.
 - **Follow-ups:** a reply in the task's thread, with or without an @-mention, becomes an input, and gets an 👀 once the worker acks it. A live session gets it at its next step, and the task goes back to `running` even if the worker had already reported, so its answer still posts. An ended task's session is resumed with it.

@@ -43,7 +43,7 @@ export interface WorkerSessionOptions {
   repo: Repo;
   worktree: Worktree;
   inputs: readonly TaskInput[];
-  ack(): string;
+  ack(): Promise<string>;
   readThread(): Promise<string>;
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
@@ -180,7 +180,7 @@ export const createAckTool = (ack: WorkerSessionOptions["ack"]) =>
     "ack",
     "Put 👀 on the owner's messages you've been given and haven't finished yet, so they know you've seen them. Call it when you start on a message from the owner.",
     {},
-    async () => ({ content: [{ type: "text", text: ack() }] }),
+    async () => ({ content: [{ type: "text", text: await ack() }] }),
   );
 
 export const createReadThreadTool = (
@@ -210,7 +210,7 @@ export const createReadThreadTool = (
 export const createReportTool = (report: WorkerSessionOptions["report"]) =>
   tool(
     "report",
-    "Tell the owner where the task stands. It posts to the task's Slack thread, and nothing else you write reaches them.",
+    "Say where the task stands. It posts to the task's Slack thread, unless you answered on GitHub (answeredOnGitHub), and nothing else you write reaches Slack.",
     {
       state: z
         .enum(REPORT_STATES)
@@ -227,6 +227,12 @@ export const createReportTool = (report: WorkerSessionOptions["report"]) =>
         .optional()
         .describe(
           "For ready: the pull request's URL, as gh pr create prints it.",
+        ),
+      answeredOnGitHub: z
+        .boolean()
+        .optional()
+        .describe(
+          "true when this turn only answered [github] messages and you already answered them on GitHub: the task's state is updated without a Slack post.",
         ),
     },
     async (workerReport) => toToolResult(report(workerReport)),

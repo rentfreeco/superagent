@@ -116,7 +116,7 @@ const setup = ({
       taskInput({}),
       taskInput({ id: 2, source: "system", ref: null, text: "restarted" }),
     ],
-    ack: () => "Put 👀 on the owner's message.",
+    ack: async () => "Put 👀 on the message.",
     readThread: async () => "[owner]\nfix the flaky test",
     report: (_report: WorkerReport): ToolOutcome => ({
       isAccepted: true,
@@ -385,13 +385,13 @@ describe("createClaudeSessionStarter", () => {
 
 describe("createAckTool", () => {
   it("puts 👀 on the owner's messages and says what it did", async () => {
-    const ack = vi.fn(() => "Put 👀 on the owner's message.");
+    const ack = vi.fn(async () => "Put 👀 on the message.");
 
     const answer = await createAckTool(ack).handler({}, undefined);
 
     expect(ack).toHaveBeenCalledOnce();
     expect(answer).toEqual({
-      content: [{ type: "text", text: "Put 👀 on the owner's message." }],
+      content: [{ type: "text", text: "Put 👀 on the message." }],
     });
   });
 });
@@ -431,6 +431,7 @@ describe("createReportTool", () => {
         summary: "Done.",
         question: undefined,
         prUrl: undefined,
+        answeredOnGitHub: undefined,
       },
       undefined,
     );

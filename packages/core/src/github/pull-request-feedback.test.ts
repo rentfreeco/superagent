@@ -169,6 +169,19 @@ describe("pullRequestFeedback", () => {
     expect(result.inputs).toEqual([]);
   });
 
+  it("says when it cut a long comment short, so the worker reads the rest with gh", () => {
+    const result = feedback({
+      discussion: {
+        ...emptyDiscussion(),
+        comments: [comment(71, reviewer, "x".repeat(5_000))],
+      },
+    });
+
+    expect(result.inputs[0]?.text).toMatch(
+      /x… \(cut short: read the whole comment with gh\)\n/,
+    );
+  });
+
   it("reads nothing it has already seen, nor empty or pending reviews", () => {
     const result = feedback({
       position: { ...UNREAD_POSITION, lastCommentId: 31 },

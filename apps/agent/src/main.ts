@@ -95,6 +95,7 @@ const main = async (): Promise<void> => {
     wakeRouter: () => router.wake(),
     logger: console,
     ownerUserId: environment.slackOwnerId,
+    gitHubClient,
   });
   const routerDirectory = path.join(
     environment.dataDirectory,

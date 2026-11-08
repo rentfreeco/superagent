@@ -17,6 +17,8 @@ export interface WorkerReport {
   summary: string;
   question?: string | undefined;
   prUrl?: string | undefined;
+  /** The worker answered on GitHub, so nothing is posted in Slack. */
+  answeredOnGitHub?: boolean | undefined;
 }
 
 export interface RecordReportOptions {
@@ -29,6 +31,8 @@ export interface RecordReportOptions {
 
 const ACCEPTED_REPLY =
   "Posted to the Slack thread. End your turn now. If the owner replies, it arrives as your next message.";
+const ANSWERED_ON_GITHUB_REPLY =
+  "Recorded without a Slack post, since you answered on GitHub. End your turn now.";
 
 const PULL_REQUEST_URL =
   /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/;
@@ -112,6 +116,9 @@ export const recordReport = ({
     const prNumber = readPullRequestNumber(report.prUrl);
     if (prNumber !== undefined) store.tasks.update(taskId, { prNumber });
     store.tasks.transition(taskId, report.state);
+    if (report.answeredOnGitHub) {
+      return { isAccepted: true, reply: ANSWERED_ON_GITHUB_REPLY };
+    }
     store.outbox.enqueue({
       dedupeKey: `report:${savedReport.id}`,
       channel: task.originChannel,

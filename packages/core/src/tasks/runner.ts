@@ -8,6 +8,8 @@ import type { Store } from "../store/open-store.ts";
 import { TASK_TRANSITIONS, type Task, type TaskState } from "../store/tasks.ts";
 import { describeError } from "../utils/describe-error.ts";
 import { truncateText } from "../utils/truncate-text.ts";
+import { acknowledgePullRequestInputs } from "../github/acknowledge-pull-request-inputs.ts";
+import type { GitHubClient } from "../github/client.ts";
 import { acknowledgeMessages } from "./acknowledge-messages.ts";
 import { handBackMessage } from "./hand-back-message.ts";
 import type {
@@ -55,6 +57,8 @@ export interface TaskRunnerOptions {
   prepareWorktree?: PrepareWorktree;
   maxSessions?: number;
   pollIntervalMs?: number;
+  /** The agent's GitHub client; ack puts 👀 on GitHub comments with it. */
+  gitHubClient?: GitHubClient | undefined;
 }
 
 export interface TaskRunner {
@@ -79,8 +83,8 @@ const isReportedState = (state: TaskState): boolean =>
 const describeAcknowledgement = (acknowledgedCount: number): string => {
   if (acknowledgedCount === 0) return "There's no new message to acknowledge.";
   return acknowledgedCount === 1
-    ? "Put 👀 on the owner's message."
-    : `Put 👀 on ${acknowledgedCount} of the owner's messages.`;
+    ? "Put 👀 on the message."
+    : `Put 👀 on ${acknowledgedCount} messages.`;
 };
 
 const fallbackSummary = (text: string, whenEmpty: string): string =>
@@ -97,9 +101,11 @@ export const createTaskRunner = ({
   ownerUserId,
   prepareWorktree = prepareGitWorktree,
   maxSessions = TASK_MAX_SESSIONS,
+  gitHubClient,
   pollIntervalMs = TASK_RUNNER_POLL_INTERVAL_MS,
 }: TaskRunnerOptions): TaskRunner => {
   const liveSessions = new Map<string, LiveSession>();
+  const acknowledgedGitHubRefs = new Set<string>();
   const launchingTaskIds = new Set<string>();
   const launches = new Set<Promise<void>>();
   let isRunning = false;
@@ -133,10 +139,40 @@ export const createTaskRunner = ({
     return true;
   };
 
-  const acknowledge = (taskId: string): string => {
-    const acknowledgedCount = acknowledgeMessages({ store, taskId });
-    if (acknowledgedCount > 0) wakeOutbox();
-    return describeAcknowledgement(acknowledgedCount);
+  const acknowledgeOnGitHub = async (taskId: string): Promise<number> => {
+    const repository = repositoryOf(taskId);
+    if (gitHubClient === undefined || repository === undefined) return 0;
+    const refs = store.inputs
+      .unread(taskId)
+      .filter(
+        ({ source, ref, deliveredAt }) =>
+          source === "github" &&
+          ref !== null &&
+          deliveredAt !== null &&
+          !acknowledgedGitHubRefs.has(ref),
+      )
+      .map(({ ref }) => ref ?? "");
+    try {
+      const acknowledged = await acknowledgePullRequestInputs({
+        client: gitHubClient,
+        repository,
+        refs,
+      });
+      for (const ref of acknowledged) acknowledgedGitHubRefs.add(ref);
+      return acknowledged.length;
+    } catch (error) {
+      logger.error(
+        `tasks: putting 👀 on ${taskId}'s GitHub comments failed: ${describeError(error)}`,
+      );
+      return 0;
+    }
+  };
+
+  const acknowledge = async (taskId: string): Promise<string> => {
+    const slackCount = acknowledgeMessages({ store, taskId });
+    if (slackCount > 0) wakeOutbox();
+    const gitHubCount = await acknowledgeOnGitHub(taskId);
+    return describeAcknowledgement(slackCount + gitHubCount);
   };
 
   const repositoryOf = (taskId: string): string | undefined =>

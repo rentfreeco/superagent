@@ -13,6 +13,7 @@ import type {
 } from "./claude-session.ts";
 import type { PrepareWorktree } from "./prepare-worktree.ts";
 import { createTaskRunner, type TaskRunner } from "./runner.ts";
+import type { GitHubClient } from "../github/client.ts";
 
 const superagentRepo: Repo = {
   name: "superagent",
@@ -63,7 +64,12 @@ const setup = ({
     branch: `agent/${taskId}`,
     path: `/data/worktrees/${taskId}`,
   })),
-}: { maxSessions?: number; prepareWorktree?: PrepareWorktree } = {}) => {
+  gitHubClient,
+}: {
+  maxSessions?: number;
+  prepareWorktree?: PrepareWorktree;
+  gitHubClient?: GitHubClient;
+} = {}) => {
   const { clock, store } = openTestStore();
   const sessions: FakeSession[] = [];
   const startSession: StartWorkerSession = (options) => {
@@ -97,6 +103,7 @@ const setup = ({
     prepareWorktree,
     maxSessions,
     pollIntervalMs: 60_000,
+    gitHubClient,
   });
   runners.push(runner);
   const createTask = (state: TaskState = "queued", repo = "superagent") => {
@@ -376,6 +383,60 @@ describe("createTaskRunner", () => {
     expect(wakeRouter).toHaveBeenCalledOnce();
   });
 
+  it("puts 👀 on the GitHub comments the worker was given when it calls ack, once each, and logs a failure instead of throwing", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({ id: 1 }));
+    const { addInput, createTask, logger, sessions, startRunner, store } =
+      setup({
+        gitHubClient: {
+          get: async () => {
+            throw new Error("only posts");
+          },
+          post: async (path, body, schema) =>
+            schema.parse(await post(path, body)),
+        },
+      });
+    const task = createTask();
+    addInput(task.id);
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:review-comment:21",
+      text: "The owner commented on src/math.js line 3.",
+    });
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:check-run:9",
+      text: 'The check "test" failed.',
+    });
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+
+    const first = await session.options.ack();
+    const second = await session.options.ack();
+    post.mockRejectedValueOnce(new Error("github: answered 502"));
+    store.inputs.add({
+      taskId: task.id,
+      source: "github",
+      ref: "github:comment:31",
+      text: "The owner commented on pull request #7.",
+    });
+    store.inputs.markDelivered(
+      store.inputs.unread(task.id).map(({ id }) => id),
+    );
+    const failed = await session.options.ack();
+
+    expect(post.mock.calls[0]?.[0]).toBe(
+      "/repos/pakgin/superagent/pulls/comments/21/reactions",
+    );
+    expect(first).toBe("Put 👀 on the message.");
+    expect(second).toBe("There's no new message to acknowledge.");
+    expect(failed).toBe("There's no new message to acknowledge.");
+    expect(logger.error).toHaveBeenCalledWith(
+      `tasks: putting 👀 on ${task.id}'s GitHub comments failed: github: answered 502`,
+    );
+  });
+
   it("puts 👀 on the owner's messages the worker was given when it calls ack", async () => {
     const {
       addInput,
@@ -403,8 +464,8 @@ describe("createTaskRunner", () => {
     addInput(task.id, "arrived after the start");
     wakeOutbox.mockClear();
 
-    expect(session.options.ack()).toBe("Put 👀 on the owner's message.");
-    expect(session.options.ack()).toBe(
+    expect(await session.options.ack()).toBe("Put 👀 on the message.");
+    expect(await session.options.ack()).toBe(
       "There's no new message to acknowledge.",
     );
 

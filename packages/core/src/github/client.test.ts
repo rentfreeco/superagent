@@ -35,6 +35,24 @@ describe("createGitHubClient", () => {
     });
   });
 
+  it("posts a JSON body", async () => {
+    const fetch = respondWith(201, { id: 5, content: "eyes" });
+    const client = createGitHubClient({ token: "ghp_agent", fetch });
+
+    await client.post(
+      "/repos/pakgin/scratch/issues/comments/31/reactions",
+      { content: "eyes" },
+      z.object({ id: z.number() }),
+    );
+
+    const [, init] = fetch.mock.calls[0] ?? [];
+    expect(init).toMatchObject({
+      method: "POST",
+      body: '{"content":"eyes"}',
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+
   it("fails with GitHub's status and message", async () => {
     const client = createGitHubClient({
       token: "ghp_revoked",

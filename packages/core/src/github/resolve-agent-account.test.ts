@@ -4,6 +4,9 @@ import { resolveAgentAccount } from "./resolve-agent-account.ts";
 
 const clientFor = (login: string): GitHubClient => ({
   get: async (_path, schema) => schema.parse({ login, id: 4242 }),
+  post: async () => {
+    throw new Error("resolveAgentAccount only reads");
+  },
 });
 
 describe("resolveAgentAccount", () => {
