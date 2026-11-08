@@ -162,6 +162,9 @@ export const MIGRATIONS: readonly string[] = [
   create index outbox_pending on outbox (next_attempt_at)
     where status = 'pending';
   `,
+  `
+  alter table tasks add column closed_at integer;
+  `,
 ];
 
 const userVersionSchema = z.object({ user_version: z.number() });

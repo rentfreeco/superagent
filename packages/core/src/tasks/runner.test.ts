@@ -995,6 +995,28 @@ describe("createTaskRunner", () => {
     expect(stateOf(store, task.id)).toBe("running");
   });
 
+  it("keeps a task closed after its worker had already reported done, even for a turn it had queued", async () => {
+    const { addInput, createTask, runner, sessions, startRunner, store } =
+      setup();
+    const task = createTask();
+    addInput(task.id);
+    await startRunner(1);
+    const session = sessionAt(sessions, 0);
+    session.options.report({ state: "done", summary: "It's the cache." });
+
+    closeTask({ store, taskId: task.id });
+    session.options.events.onTurnEnd(idleTurn({ isIdle: false }));
+    const lateReport = session.options.report({
+      state: "done",
+      summary: "Also cleared it on deploy.",
+    });
+    await runner.reconcile();
+
+    expect(lateReport.isAccepted).toBe(false);
+    expect(stateOf(store, task.id)).toBe("done");
+    expect(session.interrupt).toHaveBeenCalledOnce();
+  });
+
   it("doesn't interrupt a worker that reported done itself, and a follow-up still reopens the task", async () => {
     const { addInput, createTask, runner, sessions, startRunner, store } =
       setup();

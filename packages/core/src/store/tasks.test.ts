@@ -48,6 +48,7 @@ describe("tasks", () => {
       sessionId: null,
       createdAt: clock.now,
       lastActivityAt: clock.now,
+      closedAt: null,
     });
     expect(store.tasks.get(task.id)).toEqual(task);
     expect(store.tasks.create(flakyTestTask).id).not.toBe(task.id);
@@ -127,5 +128,21 @@ describe("tasks", () => {
       store.tasks.withState(["running", "waiting"]).map(({ id }) => id),
     ).toEqual([waiting.id, running.id]);
     expect(store.tasks.withState([])).toEqual([]);
+  });
+
+  it("marks only a done task closed, and clears it on its next transition", () => {
+    const { store, clock } = openTestStore();
+    const task = store.tasks.create({
+      title: "Fix add",
+      repo: "scratch",
+      originChannel: "C0MAPPED",
+      originTs: "100.000001",
+    });
+    store.tasks.transition(task.id, "running");
+
+    expect(() => store.tasks.markClosed(task.id)).toThrow("is running");
+    store.tasks.transition(task.id, "done");
+    expect(store.tasks.markClosed(task.id).closedAt).toBe(clock.now);
+    expect(store.tasks.transition(task.id, "running").closedAt).toBeNull();
   });
 });

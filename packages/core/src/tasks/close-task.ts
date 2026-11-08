@@ -9,8 +9,9 @@ export interface CloseRequest {
 
 /**
  * Ends a task whose pull request was merged or closed: drops what its
- * worker hadn't read and marks it done. The runner interrupts a live
- * session, which can't reopen the task; the owner's next message can.
+ * worker hadn't read, and marks it done and closed, even when its worker
+ * had already reported done. The runner interrupts a live session, which
+ * can't reopen it; the owner's next message can.
  */
 export const closeTask = ({ store, taskId }: CloseRequest): void => {
   const task = store.tasks.get(taskId);
@@ -19,4 +20,5 @@ export const closeTask = ({ store, taskId }: CloseRequest): void => {
   if (TASK_TRANSITIONS[task.state].includes("done")) {
     store.tasks.transition(taskId, "done");
   }
+  if (store.tasks.get(taskId)?.state === "done") store.tasks.markClosed(taskId);
 };

@@ -42,6 +42,7 @@ const queuedTask: Task = {
   originTs: "100.000001",
   createdAt: 1,
   lastActivityAt: 1,
+  closedAt: null,
 };
 
 const taskInput = (fields: Partial<TaskInput>): TaskInput => ({
