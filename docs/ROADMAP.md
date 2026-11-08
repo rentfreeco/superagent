@@ -17,7 +17,7 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 
 | Capability                                                | dsh-superagent                                                             | superagent                                                                                                  | Status                                                                  |
 | --------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Intake: dedupe, own-message drop, read position, catch-up | GitHub and Feishu                                                          | Slack                                                                                                       | Done for Slack; GitHub in M4                                            |
+| Intake: dedupe, own-message drop, read position, catch-up | GitHub and Feishu                                                          | Slack, and pull requests through the watcher                                                                | Done                                                                    |
 | Who may ask                                               | Allowed lists, admission table, bot lists, mandates                        | The owner gate                                                                                              | Done; the rest left out on purpose                                      |
 | Deciding new work                                         | Router session                                                             | A router session; the channel → repo map as its fallback                                                    | Done; smoke-tested live in Slack on 2026-11-07                          |
 | Ticket lifecycle: resume, stop, one state machine         | ✓                                                                          | Task states, resume on reply, `stop` or 🛑                                                                  | Done                                                                    |
@@ -29,7 +29,7 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 | Reports                                                   | progress, ready, blocked, failed, dropped; a question apart from the state | waiting, ready, done, blocked, failed                                                                       | Partial: no internal progress, no silent drop, a question ends the turn |
 | Thread context                                            | ✓                                                                          | `read_thread`, the owner's and the bot's messages                                                           | Done                                                                    |
 | Handing a follow-up back                                  | ✓                                                                          | `hand_back`, decided by the router; `nothing_to_report` (#15)                                               | Done; smoke-tested live in Slack                                        |
-| The PR follows the Ticket: CI, reviews, merge ends it     | ✓                                                                          | The pull request watcher, as superagent's own account                                                       | Done in #16; smoke-tested live                                          |
+| The PR follows the Ticket: CI, reviews, merge ends it     | ✓                                                                          | The pull request watcher, as superagent's own account, answering on GitHub                                  | Done in #16; smoke-tested live                                          |
 | Retrying passing model and network failures               | Three times with backoff                                                   | The task fails and a reply retries it                                                                       | M5                                                                      |
 | A slot kept for a person's follow-up                      | ✓                                                                          | A cap of three, oldest first                                                                                | M5                                                                      |
 | Never merging as the agent                                | ✓                                                                          | Instructions and a guard that refuses merges                                                                | Done                                                                    |
@@ -48,18 +48,21 @@ Known risks:
   - hand-back turns posted filler, and ignored messages got no sign they were read.
 - Still unexercised:
   - the opt-in sandbox;
-  - finding the bot's own posts by their metadata, which only runs when a post's delivery is uncertain;
   - another person's message in a task thread, which needs a second Slack user;
-  - `nothing_to_report` in Slack.
+  - `nothing_to_report` in Slack;
+  - a Greptile summary edit reaching the worker (an owner's edit did, live);
+  - one reply per pull request comment since the guard refuses the worker's own (live, the worker had answered twice before it);
+  - a merge during a worker's turn, which interrupts it.
 - The router follows its instructions loosely at times. In a resumed session it ignored a repeated question despite the rule to answer again. An ignored message still gets a reaction (#15).
-- CI runs lint and typecheck only. The tests run locally.
 - Claude Code keeps session transcripts under `~/.claude`. In a container they must live on the volume, or resuming a task breaks after a restart.
 - Without `SUPERAGENT_GITHUB_TOKEN`, pull requests open as your own GitHub account, GitHub doesn't let you approve your own PR, and pull requests aren't watched.
-- The worker's summary posts as it wrote it. The length limit is an instruction, not enforced.
+- The worker's summary posts as it wrote it, in Slack or on the pull request. The length limit is an instruction, not enforced.
+- Greptile rewrites its summary after every push, and each rewrite uses one of a bot's three rounds on that pull request. After about three pushes, Greptile's new findings are dropped there.
+- When Greptile re-scores a pull request and nothing needs doing, the worker still posts a one-line comment saying so.
 
 ## Milestones
 
-The order: M4 (in progress), alongside M2's last checks (the sandbox and a second run), then M5 and M6.
+The order: M2's last checks (the sandbox and a second run), then M5 and M6.
 
 ### M1 — Foundation (done)
 
@@ -80,9 +83,8 @@ Left:
 
   #15 fixes what it found.
 
-- **Still to check:**
-  - that the bot finds its own earlier posts by their metadata, which only runs when a post's delivery is uncertain;
-  - that another person's message in a task thread never reaches the worker, which needs a second Slack user.
+- **Checked on 2026-11-08:** the bot finds its own earlier posts by their metadata. `findOwnPost`, run against real Slack, found 8 of 8 recent posts at the ts the outbox recorded, and nothing for a made-up key. Every post is a thread reply, so the thread lookup is the one that runs.
+- **Still to check:** that another person's message in a task thread never reaches the worker, which needs a second Slack user.
 - **The sandbox:** it's opt-in (`SUPERAGENT_WORKER_SANDBOX=on`). Try it next: `git push` over SSH, worktree commits into the checkout's `.git`, and package installs. If it holds, make it the default.
 - **Done when:** the smoke test passes twice in a row; no one else's thread message reaches a worker; a sandboxed worker can't write outside its worktree or merge.
 
@@ -108,15 +110,28 @@ Done in #13: the candidates and decisions tables, the decision functions with th
   - an off-topic reply in a task's thread is handed back and routed;
   - the router keeps its session across restarts.
 
-### M4 — Pull request feedback (smoke-tested; a stranger's comment untested live)
+### M4 — Pull request feedback (done)
 
-Built in #16: the agent account, the watcher, the ownership checks, merge and close, the review instructions, and the guard covering `gh api`. The live run on 2026-11-08 passed three of the four "done when" checks below, in a scratch repo with CI:
+Done in #16: the agent account, the watcher, the ownership checks, merge and close, the review instructions, the guard covering `gh api`, answering on GitHub, and done reactions. The live run on 2026-11-08, in a scratch repo with CI and Greptile, passed three of the four "done when" checks below:
 
 - a pull request opened and committed to as `pakgin-agent`; its failing CI run was fixed about 40 seconds after the failure, with no Slack message;
 - the owner's review comment was fixed, and its thread resolved, by `pakgin-agent`;
 - the merge posted once and closed the task.
 
 A stranger's comment being ignored needs a third GitHub account, so only the unit tests cover it.
+
+The same day it also showed, live:
+
+- an owner's pull request comment answered on the pull request, with 👀 and then 👍, and nothing in Slack;
+- a Slack message answered in Slack, with 👀 and then ✅;
+- an owner's edited comment reaching the worker as an edit.
+
+Live runs and Greptile's review of #16 led to these, all in #16:
+
+- the worker answered pull request comments twice, its own `gh pr comment` and its report, so the guard refuses its own comments on the task's pull request;
+- a merge during a worker's turn could be undone by its next report, so a closed task carries a `closed_at` mark that no session can clear, and the runner interrupts the session;
+- CI that starts late or is rerun on the same commit went unseen, so an unchanged head's checks are read again every five minutes;
+- comment edits are tracked per comment, every GitHub list is read to the end, and a closed pull request is settled without reading its lists.
 
 - **The agent's own GitHub account, first.** Workers push, open pull requests, comment, and resolve review threads as the agent account, never as the owner, so the owner can review and approve its work and M4 can tell their comments from the agent's.
   - `.env` gets `SUPERAGENT_GITHUB_TOKEN`, a token for the agent account, and `SUPERAGENT_OWNER_GITHUB`, the owner's GitHub login.
