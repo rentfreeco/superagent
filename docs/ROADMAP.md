@@ -19,67 +19,76 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 | --------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Intake: dedupe, own-message drop, read position, catch-up | GitHub and Feishu                                                          | Slack                                                                                 | Done for Slack; GitHub in M4                                            |
 | Who may ask                                               | Allowed lists, admission table, bot lists, mandates                        | The owner gate                                                                        | Done; the rest left out on purpose                                      |
-| Deciding new work                                         | Router session                                                             | A router session; the channel → repo map as its fallback                              | Code complete in #13; waiting on a live run                             |
+| Deciding new work                                         | Router session                                                             | A router session; the channel → repo map as its fallback                              | Done; smoke-tested live in Slack on 2026-11-07                          |
 | Ticket lifecycle: resume, stop, one state machine         | ✓                                                                          | Task states, resume on reply, `stop` or 🛑                                            | Done                                                                    |
 | A worker per Ticket: session and directory                | ✓                                                                          | Agent SDK session and worktree on `agent/<id>`                                        | Done, across several repos                                              |
 | Inputs delivered and read, redelivery after a restart     | ✓                                                                          | ✓                                                                                     | Done                                                                    |
 | Restart recovery                                          | ✓                                                                          | Snapshot, replay, catch-up, resume with a restart note                                | Done                                                                    |
 | Durable, ordered posts                                    | ✓                                                                          | The outbox                                                                            | Done                                                                    |
-| Acknowledgement                                           | One specific sentence                                                      | 👀 when the worker calls `ack`                                                        | Done, as a reaction by choice                                           |
+| Acknowledgement                                           | One specific sentence                                                      | 👀 when the worker calls `ack`; a reaction when the router lets it be                 | Done, as a reaction by choice                                           |
 | Reports                                                   | progress, ready, blocked, failed, dropped; a question apart from the state | waiting, ready, done, blocked, failed                                                 | Partial: no internal progress, no silent drop, a question ends the turn |
 | Thread context                                            | ✓                                                                          | `read_thread`, the owner's and the bot's messages                                     | Done                                                                    |
-| Handing a follow-up back                                  | ✓                                                                          | The worker's `hand_back`, decided by the router                                       | Code complete in #13; waiting on a live run                             |
+| Handing a follow-up back                                  | ✓                                                                          | `hand_back`, decided by the router; `nothing_to_report` (#15)                         | Done; smoke-tested live in Slack                                        |
 | The PR follows the Ticket: CI, reviews, merge ends it     | ✓                                                                          | —                                                                                     | M4                                                                      |
 | Retrying passing model and network failures               | Three times with backoff                                                   | The task fails and a reply retries it                                                 | M5                                                                      |
 | A slot kept for a person's follow-up                      | ✓                                                                          | A cap of three, oldest first                                                          | M5                                                                      |
 | Never merging as the agent                                | ✓                                                                          | Instructions and a guard that refuses merges                                          | Done                                                                    |
 | Team prompt sections                                      | ✓                                                                          | The repo's `CLAUDE.md` and fixed instructions                                         | M5                                                                      |
-| Panel, pause                                              | ✓                                                                          | —                                                                                     | The panel is left out; a Slack `status` reply in M3                     |
+| Panel, pause                                              | ✓                                                                          | The router's `list_tasks` answers "what's waiting on me?"                             | Status done in #13; pause in M5; the panel left out                     |
 | Proactive rules                                           | ✓                                                                          | —                                                                                     | M6                                                                      |
-| Isolation                                                 | Full access, a dedicated OS user                                           | `dontAsk`, a tool allowlist, a guard, an environment allowlist; the sandbox is opt-in | Done but the sandbox (M2 smoke test); container in M5                   |
+| Isolation                                                 | Full access, a dedicated OS user                                           | `dontAsk`, a tool allowlist, a guard, an environment allowlist; the sandbox is opt-in | Done; the sandbox untried; container in M5                              |
 
 Known risks:
 
-- Nothing has run end to end against real Slack and a real Claude Code session yet. Some settings only a real session applies, and three of them could stop every task: the guard's `onFailure: "block"`, the allowlisted names of the `superagent` tools, and the built-in tool names on the allowlist.
+- The smoke test ran in Slack on 2026-11-07, against a scratch repo with a Slack app of its own. It passed every M2 and M3 check (below). It also found what #15 fixes:
+  - sessions loaded every built-in tool and the machine's claude.ai connectors;
+  - `.claude` directories refuse workers' edits;
+  - long commands went to the background, and the task stalled;
+  - an owner ID set to the bot's own was silently ignored;
+  - hand-back turns posted filler, and ignored messages got no sign they were read.
+- Still unexercised:
+  - the opt-in sandbox;
+  - finding the bot's own posts by their metadata, which only runs when a post's delivery is uncertain;
+  - another person's message in a task thread, which needs a second Slack user;
+  - `nothing_to_report` in Slack.
+- The router follows its instructions loosely at times. In a resumed session it ignored a repeated question despite the rule to answer again. An ignored message still gets a reaction (#15).
+- CI runs lint and typecheck only. The tests run locally.
 - Claude Code keeps session transcripts under `~/.claude`. In a container they must live on the volume, or resuming a task breaks after a restart.
 - Pull requests open as your own GitHub account, and GitHub does not let you approve your own PR.
 - The worker's summary posts as it wrote it. The length limit is an instruction, not enforced.
 
 ## Milestones
 
-The order: M2's smoke test and M3's live run, then M4, M5, and M6.
+The order: M2's last checks (the sandbox and a second run), then M4, M5, and M6.
 
 ### M1 — Foundation (done)
 
 The Slack gateway and owner gate, channel → repo routing, the SQLite store, the outbox, and restart recovery.
 
-### M2 — Finish the worker loop (code complete; waiting on the smoke test)
+### M2 — Finish the worker loop (smoke-tested; the sandbox and a second run left)
 
 Done: the task runner, worktrees, the `ack`, `read_thread`, and `report` tools, follow-ups into live sessions, resume after a restart, `stop`, thread replies without a mention, stop by 🛑, and locked-down workers (`dontAsk`, the tool allowlist, the guard, the environment allowlist, and the instructions).
 
 Left:
 
-- **A live smoke test** with a scratch repo and a Slack app of your own:
-  - a mention, then 👀, a PR, and the ready post;
-  - a follow-up mid-turn;
-  - `stop`;
-  - a restart mid-task;
-  - a DM.
+- **The Slack smoke test passed on 2026-11-07:**
+  - a mention led to 👀, a PR, and the ready post;
+  - a follow-up sent mid-turn went into the same PR;
+  - `stop` stopped a task and kept its branch;
+  - a restart mid-task resumed it, caught up a message sent while the bot was down, and dropped Slack's late duplicate of it;
+  - DMs were answered.
 
-  It settles what tests can't:
-  - that the session starts with the guard's `onFailure: "block"`;
-  - that the allowlisted tool names, the `superagent` tools and the built-in ones, are what Claude Code checks;
-  - that the bot finds its own earlier posts by their metadata;
-  - that turn results list the prompts they read (`user_message_uuids`).
+  #15 fixes what it found.
 
-  Before running it, run `pnpm install`, and paste the manifest again and reinstall the Slack app for the new scopes and events.
-
-- **The sandbox:** it's opt-in (`SUPERAGENT_WORKER_SANDBOX=on`). Try it in the smoke test: `git push` over SSH, worktree commits into the checkout's `.git`, and package installs. If it holds, make it the default.
+- **Still to check:**
+  - that the bot finds its own earlier posts by their metadata, which only runs when a post's delivery is uncertain;
+  - that another person's message in a task thread never reaches the worker, which needs a second Slack user.
+- **The sandbox:** it's opt-in (`SUPERAGENT_WORKER_SANDBOX=on`). Try it next: `git push` over SSH, worktree commits into the checkout's `.git`, and package installs. If it holds, make it the default.
 - **Done when:** the smoke test passes twice in a row; no one else's thread message reaches a worker; a sandboxed worker can't write outside its worktree or merge.
 
-### M3 — Router (code complete; waiting on a live run)
+### M3 — Router (done)
 
-Code complete in #13: the candidates and decisions tables, the decision functions with the channel-map fallback, the router session and its loop, the handler handing every new message to it, the worker's `hand_back` tool, `SUPERAGENT_ROUTER`, and repo descriptions. Left: a live run.
+Done in #13: the candidates and decisions tables, the decision functions with the channel-map fallback, the router session and its loop, the handler handing every new message to it, the worker's `hand_back` tool, `SUPERAGENT_ROUTER`, and repo descriptions. The Slack smoke test on 2026-11-07 passed every "done when" check below. #15 adds `nothing_to_report`, a reaction on messages the router lets be, and a rule to answer a repeated question again.
 
 - **A long-lived router session:** its ID kept in the store, low effort, and only routing tools: no shell and no file reads.
 - **It sees** every owner message no task owns: DMs, mentions outside task threads, and hand-backs. Each comes with the channel's repo, the thread, and related tasks.
@@ -89,7 +98,7 @@ Code complete in #13: the candidates and decisions tables, the decision function
   - `attach(task_id)`: only when the message points at a task explicitly;
   - `stop(task_id)`;
   - `list_tasks`, which answers "what's waiting on me?" in place of a panel.
-- **A worker `hand_back(reason)` tool** for a follow-up that isn't about its task.
+- **A worker `hand_back(message_id, reason)` tool** for a follow-up that isn't about its task. Each Slack message reaches the worker labeled `[message N]`, and the worker names the one it hands back.
 - **A `description` for each repo** in `superagent.config.ts`, so the router can choose.
 - **A `decisions` table** recording why each message went where. M6 uses it too.
 - **If the router fails,** a mapped channel still routes by the map.
@@ -125,7 +134,7 @@ Code complete in #13: the candidates and decisions tables, the decision function
 - **A session slot kept** for the owner's follow-ups.
 - **Worktree cleanup** seven days after a task ends; branches stay.
 - **Per-repo instructions in the config,** such as delivery and scope rules, added to the worker's prompt.
-- **A `status` reply,** and a pause switch if it earns its place.
+- **A pause switch,** if it earns its place. Status questions already go to the router's `list_tasks` (M3).
 - **Done when:** `docker compose up` runs on the server, a container restart resumes a running task, and the logs show no secrets.
 
 ### M6 — Proactive rules
@@ -147,6 +156,6 @@ Code complete in #13: the candidates and decisions tables, the decision function
 ## Open decisions
 
 1. Should the router rewrite worker reports into short Slack messages, as dsh-superagent does, or should workers keep posting directly? Leaning: post directly, with a hard length cap.
-2. A dedicated GitHub agent account before M4?
+2. A dedicated GitHub agent account before M4? M4 needs an answer: the agent's pull requests open as your account, and GitHub doesn't let you approve your own.
 3. The worker sandbox on macOS as well, or only in the Linux container?
 4. A word limit on posts, like dsh-superagent's 100?
