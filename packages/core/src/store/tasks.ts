@@ -20,12 +20,12 @@ export const TASK_TRANSITIONS: Readonly<
 > = {
   queued: ["running", "failed", "stopped"],
   running: ["waiting", "ready", "done", "blocked", "failed", "stopped"],
-  waiting: ["running", "stopped"],
+  waiting: ["running", "done", "stopped"],
   ready: ["running", "done", "stopped"],
   done: ["running"],
-  blocked: ["running"],
-  failed: ["running"],
-  stopped: ["running"],
+  blocked: ["running", "done"],
+  failed: ["running", "done"],
+  stopped: ["running", "done"],
 };
 
 const taskSchema = z.object({
@@ -66,6 +66,8 @@ export interface TaskStore {
   update(id: string, changes: TaskChanges): Task;
   transition(id: string, to: TaskState): Task;
   withState(states: readonly TaskState[]): Task[];
+  /** Tasks whose worker reported a pull request, oldest first. */
+  withPullRequest(): Task[];
 }
 
 const TASK_COLUMNS =
@@ -83,6 +85,10 @@ export const createTaskStore = (
   database: DatabaseSync,
   now: () => number,
 ): TaskStore => {
+  const selectWithPullRequest = database.prepare(
+    `select ${TASK_COLUMNS} from tasks
+     where pr_number is not null order by created_at, id`,
+  );
   const insertTask = database.prepare(
     `insert into tasks (id, title, repo, state, origin_channel, origin_ts, created_at, last_activity_at)
      values (:id, :title, :repo, 'queued', :originChannel, :originTs, :now, :now)
@@ -172,5 +178,7 @@ export const createTaskStore = (
         .all(...states)
         .map((row) => taskSchema.parse(row));
     },
+    withPullRequest: () =>
+      selectWithPullRequest.all().map((row) => taskSchema.parse(row)),
   };
 };

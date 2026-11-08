@@ -12,6 +12,12 @@ export const GITHUB_API_VERSION = "2022-11-28";
 export const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 export const GITHUB_ERROR_BODY_MAX_LENGTH = 300;
 export const GITHUB_NOREPLY_EMAIL_DOMAIN = "users.noreply.github.com";
+export const GITHUB_PAGE_SIZE = 100;
+export const GITHUB_MAX_PAGES = 10;
+
+export const PULL_REQUEST_POLL_INTERVAL_MS = 60_000;
+export const PULL_REQUEST_MAX_BOT_ROUNDS = 3;
+export const PULL_REQUEST_INPUT_MAX_LENGTH = 4_000;
 
 export const TASK_ID_LENGTH = 8;
 export const TASK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
