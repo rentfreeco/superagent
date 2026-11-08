@@ -93,8 +93,26 @@ const positionals = (
 ): string[] =>
   positionalIndexes(args, optionsWithValues).map((index) => args[index] ?? "");
 
+const GH_API_REFUSALS: readonly (readonly [RegExp, string])[] = [
+  [
+    /\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/,
+    MERGE_REFUSAL,
+  ],
+  [/\bevent\s*[=:]\s*"?APPROVE\b/, APPROVE_REFUSAL],
+  [
+    /\bcloseIssue\b|\/issues\/\d+\b.*\bstate\s*[=:]\s*"?closed\b/,
+    CLOSE_REFUSAL,
+  ],
+];
+
+const ghApiRefusal = (args: readonly string[]): string | undefined => {
+  const request = args.join(" ");
+  return GH_API_REFUSALS.find(([pattern]) => pattern.test(request))?.[1];
+};
+
 const ghRefusal = (args: readonly string[]): string | undefined => {
   const [group, action] = positionals(args, GH_OPTIONS_WITH_VALUES);
+  if (group === "api") return ghApiRefusal(args);
   if (group === "pr" && action === "merge") return MERGE_REFUSAL;
   if (
     group === "pr" &&

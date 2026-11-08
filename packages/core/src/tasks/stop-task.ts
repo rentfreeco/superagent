@@ -1,5 +1,6 @@
 import type { Store } from "../store/open-store.ts";
 import { TASK_TRANSITIONS, type Task } from "../store/tasks.ts";
+import { dropUnreadInputs } from "./drop-unread-inputs.ts";
 
 export interface StopRequest {
   store: Pick<Store, "tasks" | "inputs" | "outbox">;
@@ -37,9 +38,7 @@ export const stopTask = ({
   const hasWaitingInput = store.inputs.undelivered(taskId).length > 0;
   const canStop = TASK_TRANSITIONS[task.state].includes("stopped");
   if (canStop) store.tasks.transition(taskId, "stopped");
-  const droppedInputIds = store.inputs.unread(taskId).map(({ id }) => id);
-  store.inputs.markDelivered(droppedInputIds);
-  store.inputs.markRead(droppedInputIds);
+  dropUnreadInputs(store, taskId);
   const outcome: StopOutcome = canStop
     ? "stopped"
     : hasWaitingInput

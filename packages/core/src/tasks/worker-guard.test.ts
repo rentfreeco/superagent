@@ -85,6 +85,13 @@ describe("refusalFor commands", () => {
     "for n in 7; do gh issue close $n; done",
     "! git push -f",
     "echo gh pr merge",
+    "gh api -X PUT repos/pakgin/scratch/pulls/7/merge",
+    "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_1\"}) { clientMutationId } }'",
+    "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_1\"}) { clientMutationId } }'",
+    "gh api repos/pakgin/scratch/pulls/7/reviews -f event=APPROVE",
+    "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"PR_1\", event: APPROVE}) { clientMutationId } }'",
+    "gh api -X PATCH repos/pakgin/scratch/issues/3 -f state=closed",
+    "gh api graphql -f query='mutation { closeIssue(input: {issueId: \"I_1\"}) { clientMutationId } }'",
   ])("refuses `%s`", async (command) => {
     expect(await bash(command)).toEqual(expect.any(String));
   });
@@ -102,6 +109,10 @@ describe("refusalFor commands", () => {
     "git push origin agent/maintenance",
     'echo "gh pr merge"',
     "grep -rn gh src",
+    "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"T_1\"}) { thread { isResolved } } }'",
+    "gh api repos/pakgin/scratch/pulls/7/comments/21/replies -f body='Renamed it.'",
+    "gh api repos/pakgin/scratch/pulls/7/reviews",
+    "gh api -X PATCH repos/pakgin/scratch/pulls/7 -f title='Fix add'",
   ])("allows `%s`", async (command) => {
     expect(await bash(command)).toBeUndefined();
   });
