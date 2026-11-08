@@ -9,8 +9,8 @@ export interface CloseRequest {
 
 /**
  * Ends a task whose pull request was merged or closed: drops what its
- * worker hadn't read and marks it done. A live session ends at its next
- * turn, since a report for a task that isn't running is turned down.
+ * worker hadn't read and marks it done. The runner interrupts a live
+ * session, which can't reopen the task; the owner's next message can.
  */
 export const closeTask = ({ store, taskId }: CloseRequest): void => {
   const task = store.tasks.get(taskId);

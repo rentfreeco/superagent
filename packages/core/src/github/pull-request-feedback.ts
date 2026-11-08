@@ -16,9 +16,11 @@ export const pullRequestPositionSchema = z.object({
   lastReviewId: z.number(),
   lastReviewCommentId: z.number(),
   lastCommentId: z.number(),
-  /** The newest updated_at among the comments read; a comment already seen and updated after it was edited. Positions saved before it fall back to updatedAt. */
-  lastCommentUpdatedAt: z.string().optional(),
+  /** Each comment's updated_at as last read, by its ref; a later one is an edit. Positions saved before it compare with updatedAt. */
+  commentVersions: z.record(z.string(), z.string()).optional(),
   seenCheckRunIds: z.array(z.number()),
+  /** When the head commit's checks were last read. */
+  checksReadAt: z.number().optional(),
   botRounds: z.number(),
 });
 
@@ -34,6 +36,8 @@ export interface PullRequestFeedbackRequest {
   position: PullRequestPosition | undefined;
   agentLogin: string;
   ownerLogin: string;
+  /** When the snapshot was read. */
+  readAt: number;
 }
 
 export interface PullRequestInput {
@@ -70,6 +74,8 @@ interface EditableItem extends Item {
   updated_at: string;
 }
 
+type CommentKind = "comment" | "review-comment";
+
 const FAILED_CONCLUSIONS = new Set([
   "failure",
   "timed_out",
@@ -92,7 +98,7 @@ export const UNREAD_POSITION: PullRequestPosition = {
   lastReviewId: 0,
   lastReviewCommentId: 0,
   lastCommentId: 0,
-  lastCommentUpdatedAt: "",
+  commentVersions: {},
   seenCheckRunIds: [],
   botRounds: 0,
 };
@@ -104,11 +110,10 @@ const isTaskBranch = ({ head, base }: PullRequest, taskId: string) =>
 const lastId = (items: readonly Item[], previous: number) =>
   Math.max(previous, ...items.map(({ id }) => id));
 
-const lastUpdatedAt = (items: readonly EditableItem[], previous: string) =>
-  items.reduce(
-    (latest, { updated_at }) => (updated_at > latest ? updated_at : latest),
-    previous,
-  );
+const commentRef = (kind: CommentKind, { id }: Item) => `github:${kind}:${id}`;
+
+const versionsOf = (kind: CommentKind, comments: readonly EditableItem[]) =>
+  comments.map((comment) => [commentRef(kind, comment), comment.updated_at]);
 
 /**
  * What a poll of a task's pull request means: the inputs that wake its
@@ -122,6 +127,7 @@ export const pullRequestFeedback = ({
   position,
   agentLogin,
   ownerLogin,
+  readAt,
 }: PullRequestFeedbackRequest): PullRequestFeedback => {
   const number = pullRequest.number;
   const seen = position ?? UNREAD_POSITION;
@@ -183,20 +189,19 @@ export const pullRequestFeedback = ({
     }
   };
 
-  const editsAfter = seen.lastCommentUpdatedAt ?? seen.updatedAt;
   /** A new comment, an edit of one already seen, or undefined for neither. */
   const commentChange = (
     comment: EditableItem,
-    kind: "comment" | "review-comment",
+    kind: CommentKind,
     lastSeenId: number,
   ) => {
-    if (comment.id > lastSeenId) {
-      return { verb: "commented", ref: `github:${kind}:${comment.id}` };
-    }
-    return comment.updated_at > editsAfter
+    const ref = commentRef(kind, comment);
+    if (comment.id > lastSeenId) return { verb: "commented", ref };
+    const lastRead = seen.commentVersions?.[ref] ?? seen.updatedAt;
+    return comment.updated_at > lastRead
       ? {
           verb: "edited a comment",
-          ref: `github:${kind}:${comment.id}:edited:${comment.updated_at}`,
+          ref: `${ref}:edited:${comment.updated_at}`,
         }
       : undefined;
   };
@@ -286,15 +291,16 @@ export const pullRequestFeedback = ({
         seen.lastReviewCommentId,
       ),
       lastCommentId: lastId(discussion?.comments ?? [], seen.lastCommentId),
-      lastCommentUpdatedAt:
+      commentVersions:
         discussion === undefined
-          ? seen.lastCommentUpdatedAt
-          : lastUpdatedAt(
-              [...discussion.reviewComments, ...discussion.comments],
-              editsAfter,
-            ),
+          ? seen.commentVersions
+          : Object.fromEntries([
+              ...versionsOf("review-comment", discussion.reviewComments),
+              ...versionsOf("comment", discussion.comments),
+            ]),
       seenCheckRunIds:
         checkRuns === undefined ? seen.seenCheckRunIds : seenCheckRunIds,
+      checksReadAt: checkRuns === undefined ? seen.checksReadAt : readAt,
       botRounds: seen.botRounds + (hasBotInput ? 1 : 0),
     },
   };

@@ -175,7 +175,10 @@ export const createOutboxSender = ({
             ...target,
             postedAfter: attempt.createdAt,
           }));
-        if (!isPosted) await gitHub.comment({ ...target, text: message.text });
+        if (!isPosted) {
+          if (activeDeliveries === undefined) return;
+          await gitHub.comment({ ...target, text: message.text });
+        }
         outbox.markSent(attempt.id, null);
         return;
       }

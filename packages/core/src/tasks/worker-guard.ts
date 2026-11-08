@@ -3,6 +3,7 @@ import path from "node:path";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { splitShellCommands } from "../utils/split-shell-commands.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 
 export interface WorkerGuardOptions {
   worktreePath: string;
@@ -11,7 +12,7 @@ export interface WorkerGuardOptions {
   baseBranch: string;
   homeDirectory: string;
   /** The task's pull request, once it has one: the worker answers there only through its report. */
-  pullRequestNumber?: () => number | undefined;
+  pullRequest?: () => TaskPullRequest | undefined;
 }
 
 const CREDENTIAL_DIRECTORIES = [
@@ -118,48 +119,91 @@ const GH_API_REFUSALS: readonly (readonly [RegExp, string])[] = [
   ],
 ];
 
-/** gh api sends fields, an input file, or a method other than GET. */
-const isGhApiWrite = (args: readonly string[]): boolean =>
-  args.some((arg, index) => {
-    if (GH_API_FIELD_OPTION.test(arg)) return true;
-    const [, method] = arg.match(/^(?:-X|--method)=?(.*)$/) ?? [];
-    if (method === undefined) return false;
-    return (method || args[index + 1] || "").toUpperCase() !== "GET";
-  });
+/** The value of an option given as `--name value`, `--name=value`, or `-Nvalue`. */
+const optionValue = (
+  args: readonly string[],
+  names: readonly string[],
+): string | undefined => {
+  for (const [index, arg] of args.entries()) {
+    if (names.includes(arg)) return args[index + 1];
+    for (const name of names) {
+      const prefix = name.startsWith("--") ? `${name}=` : name;
+      if (arg.startsWith(prefix) && arg.length > prefix.length) {
+        return arg.slice(prefix.length);
+      }
+    }
+  }
+  return undefined;
+};
+
+/** gh api writes when its method isn't GET; without one, when it sends fields or an input file. */
+const isGhApiWrite = (args: readonly string[]): boolean => {
+  const method = optionValue(args, ["-X", "--method"]);
+  return method === undefined
+    ? args.some((arg) => GH_API_FIELD_OPTION.test(arg))
+    : method.toUpperCase() !== "GET";
+};
+
+/** `owner/name`, or `HOST/owner/name` as gh's --repo takes it. */
+const isRepository = (named: string, repository: string): boolean => {
+  const lowerNamed = named.toLowerCase();
+  const lowerRepository = repository.toLowerCase();
+  return (
+    lowerNamed === lowerRepository || lowerNamed.endsWith(`/${lowerRepository}`)
+  );
+};
 
 const ghApiRefusal = (
   args: readonly string[],
-  pullRequestNumber: number | undefined,
+  pullRequest: TaskPullRequest | undefined,
 ): string | undefined => {
   const request = args.join(" ");
-  if (
-    pullRequestNumber !== undefined &&
-    request.includes(`/issues/${pullRequestNumber}/comments`) &&
-    isGhApiWrite(args)
-  ) {
-    return COMMENT_REFUSAL;
-  }
+  const lowerRequest = request.toLowerCase();
+  const isTaskCommentList =
+    pullRequest !== undefined &&
+    [pullRequest.repository, "{owner}/{repo}"].some((repository) =>
+      lowerRequest.includes(
+        `repos/${repository.toLowerCase()}/issues/${pullRequest.number}/comments`,
+      ),
+    );
+  if (isTaskCommentList && isGhApiWrite(args)) return COMMENT_REFUSAL;
   return GH_API_REFUSALS.find(([pattern]) => pattern.test(request))?.[1];
 };
 
-/** A gh pr or issue selector naming the task's pull request; none means the current branch's. */
-const isTaskPullRequest = (
+/**
+ * Whether a gh pr or issue command names the task's pull request: by
+ * number or URL in the task's repo, or by nothing, which means the
+ * current branch's.
+ */
+const namesTaskPullRequest = (
+  args: readonly string[],
   group: string | undefined,
   selector: string | undefined,
-  pullRequestNumber: number,
-): boolean =>
-  selector === undefined
-    ? group === "pr"
-    : selector === String(pullRequestNumber) ||
-      selector === `#${pullRequestNumber}` ||
-      selector.endsWith(`/pull/${pullRequestNumber}`);
+  { repository, number }: TaskPullRequest,
+): boolean => {
+  const repoOption = optionValue(args, ["-R", "--repo"]);
+  if (repoOption !== undefined && !isRepository(repoOption, repository)) {
+    return false;
+  }
+  if (selector === undefined) return group === "pr";
+  const [, urlRepository, urlNumber] =
+    selector.match(
+      /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/,
+    ) ?? [];
+  if (urlRepository !== undefined) {
+    return (
+      isRepository(urlRepository, repository) && Number(urlNumber) === number
+    );
+  }
+  return selector === String(number) || selector === `#${number}`;
+};
 
 const ghRefusal = (
   args: readonly string[],
-  pullRequestNumber: number | undefined,
+  pullRequest: TaskPullRequest | undefined,
 ): string | undefined => {
   const [group, action, selector] = positionals(args, GH_OPTIONS_WITH_VALUES);
-  if (group === "api") return ghApiRefusal(args, pullRequestNumber);
+  if (group === "api") return ghApiRefusal(args, pullRequest);
   if (group === "pr" && action === "merge") return MERGE_REFUSAL;
   if (
     group === "pr" &&
@@ -177,8 +221,8 @@ const ghRefusal = (
     (group === "issue" && action === "comment");
   if (
     isComment &&
-    pullRequestNumber !== undefined &&
-    isTaskPullRequest(group, selector, pullRequestNumber)
+    pullRequest !== undefined &&
+    namesTaskPullRequest(args, group, selector, pullRequest)
   ) {
     return COMMENT_REFUSAL;
   }
@@ -227,9 +271,9 @@ const gitRefusal = (
 
 const commandRefusal = (
   command: string,
-  { baseBranch, pullRequestNumber }: WorkerGuardOptions,
+  { baseBranch, pullRequest }: WorkerGuardOptions,
 ): string | undefined => {
-  const taskPullRequestNumber = pullRequestNumber?.();
+  const taskPullRequest = pullRequest?.();
   // Any word of a command can start the gh or git it runs, after a keyword
   // (if, do, !), a wrapper and its options (env -i, sudo -u bot, xargs), or a
   // VAR=value prefix, so every position is checked. An unquoted mention, such
@@ -240,7 +284,7 @@ const commandRefusal = (
       const args = words.slice(index + 1);
       const refusal =
         program === "gh"
-          ? ghRefusal(args, taskPullRequestNumber)
+          ? ghRefusal(args, taskPullRequest)
           : program === "git"
             ? gitRefusal(args, baseBranch)
             : undefined;

@@ -185,7 +185,7 @@ watcher.start(); // polls every minute; watcher.stop() on shutdown
 - **What reaches the worker:** the owner's reviews and comments, installed bots' such as Greptile's (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. A comment edited after it was read comes again, saying so, with its new text, such as Greptile's summary, which it rewrites after each review. The worker answers on GitHub: 👀 on the comment, resolving a review thread it fixed or replying in it to decline, and a report posted as a pull request comment instead of in Slack. Once the turn ends, 👀 becomes 👍. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
 - **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. Anything else gets one note in the thread and is left alone.
 - **A merge or close** posts once in the thread and ends the task as done.
-- **Cost:** a quiet pull request takes one request a minute. Reviews and comments are read only when it changed, and checks only for a new head commit or while some are pending.
+- **Cost:** a quiet pull request takes one request a minute, and one more every five minutes for its checks. Reviews and comments are read only when it changed, and checks for a new head commit, while some are pending, and every five minutes otherwise, so CI that starts late or is rerun still counts.
 
 ## `@repo/core/outbox`
 

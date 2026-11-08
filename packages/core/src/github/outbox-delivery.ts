@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { GitHubReaction, OutboxGitHubDelivery } from "../outbox/sender.ts";
 import { type GitHubClient, GitHubRequestError } from "./client.ts";
+import { getAllPages } from "./get-all-pages.ts";
 
 export interface GitHubDeliveryOptions {
   client: GitHubClient;
@@ -42,9 +43,11 @@ export const createGitHubDelivery = ({
       );
     },
     hasComment: async ({ repository, issueNumber, dedupeKey, postedAfter }) => {
-      const comments = await client.get(
-        `/repos/${repository}/issues/${issueNumber}/comments?since=${new Date(postedAfter).toISOString()}&per_page=100`,
+      const comments = await getAllPages(
+        client,
+        `/repos/${repository}/issues/${issueNumber}/comments?since=${new Date(postedAfter).toISOString()}`,
         z.array(commentSchema),
+        (page) => page,
       );
       return comments.some(
         ({ body, user }) =>
@@ -60,9 +63,11 @@ export const createGitHubDelivery = ({
     },
     unreact: async (reaction) => {
       const path = reactionsPath(reaction);
-      const reactions = await client.get(
-        `${path}?content=${encodeURIComponent(reaction.content)}&per_page=100`,
+      const reactions = await getAllPages(
+        client,
+        `${path}?content=${encodeURIComponent(reaction.content)}`,
         z.array(reactionSchema),
+        (page) => page,
       );
       for (const { id, user } of reactions) {
         if (isAgent(user)) await client.delete(`${path}/${id}`);

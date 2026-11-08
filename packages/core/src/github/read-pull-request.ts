@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { GITHUB_MAX_PAGES, GITHUB_PAGE_SIZE } from "../constants.ts";
 import type { GitHubClient } from "./client.ts";
+import { getAllPages } from "./get-all-pages.ts";
 
 const authorSchema = z.object({ login: z.string(), type: z.string() });
 
@@ -89,23 +89,6 @@ export interface PullRequestReadRequest {
   shouldReadChecks: (pullRequest: PullRequest) => boolean;
 }
 
-const getAllPages = async <Item extends z.ZodType>(
-  client: GitHubClient,
-  path: string,
-  itemSchema: Item,
-): Promise<z.output<Item>[]> => {
-  const items: z.output<Item>[] = [];
-  for (let page = 1; page <= GITHUB_MAX_PAGES; page += 1) {
-    const pageItems = await client.get(
-      `${path}?per_page=${GITHUB_PAGE_SIZE}&page=${page}`,
-      z.array(itemSchema),
-    );
-    items.push(...pageItems);
-    if (pageItems.length < GITHUB_PAGE_SIZE) break;
-  }
-  return items;
-};
-
 /** One pull request, and only the parts of it the caller says have changed. */
 export const readPullRequest = async ({
   client,
@@ -119,16 +102,23 @@ export const readPullRequest = async ({
   const [discussion, checkRuns] = await Promise.all([
     shouldReadDiscussion(pullRequest)
       ? Promise.all([
-          getAllPages(client, `${pullRequestPath}/reviews`, reviewSchema),
+          getAllPages(
+            client,
+            `${pullRequestPath}/reviews`,
+            z.array(reviewSchema),
+            (page) => page,
+          ),
           getAllPages(
             client,
             `${pullRequestPath}/comments`,
-            reviewCommentSchema,
+            z.array(reviewCommentSchema),
+            (page) => page,
           ),
           getAllPages(
             client,
             `/repos/${repository}/issues/${number}/comments`,
-            issueCommentSchema,
+            z.array(issueCommentSchema),
+            (page) => page,
           ),
         ]).then(
           ([reviews, reviewComments, comments]): PullRequestDiscussion => ({
@@ -139,12 +129,12 @@ export const readPullRequest = async ({
         )
       : undefined,
     shouldReadChecks(pullRequest)
-      ? client
-          .get(
-            `/repos/${repository}/commits/${pullRequest.head.sha}/check-runs?per_page=${GITHUB_PAGE_SIZE}`,
-            checkRunsSchema,
-          )
-          .then(({ check_runs }) => check_runs)
+      ? getAllPages(
+          client,
+          `/repos/${repository}/commits/${pullRequest.head.sha}/check-runs`,
+          checkRunsSchema,
+          ({ check_runs }) => check_runs,
+        )
       : undefined,
   ]);
   return { pullRequest, discussion, checkRuns };

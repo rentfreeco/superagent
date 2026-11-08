@@ -78,6 +78,8 @@ interface LiveSession {
   deliveredSinceReport: Set<number>;
   /** Inputs the worker handed back, which the router answers instead. */
   handedBackInputIds: Set<number>;
+  /** Whether this session's own report made the task done; done otherwise means its pull request closed it. */
+  hasReportedDone: boolean;
 }
 
 const isReportedState = (state: TaskState): boolean =>
@@ -121,10 +123,17 @@ export const createTaskRunner = ({
     }
   };
 
+  /** The task's pull request closed it under this session, which must not reopen it. */
+  const isClosedUnder = (taskId: string, live: LiveSession): boolean =>
+    store.tasks.get(taskId)?.state === "done" && !live.hasReportedDone;
+
   const reopenReportedTask = (taskId: string): void => {
     const task = store.tasks.get(taskId);
+    const live = liveSessions.get(taskId);
+    if (live !== undefined && isClosedUnder(taskId, live)) return;
     if (task !== undefined && isReportedState(task.state)) {
       store.tasks.transition(taskId, "running");
+      if (live !== undefined) live.hasReportedDone = false;
     }
   };
 
@@ -257,7 +266,10 @@ export const createTaskRunner = ({
         });
       }),
     );
-    if (outcome.isAccepted) live?.deliveredSinceReport.clear();
+    if (outcome.isAccepted && live !== undefined) {
+      live.deliveredSinceReport.clear();
+      live.hasReportedDone = workerReport.state === "done";
+    }
     return outcome;
   };
 
@@ -418,8 +430,7 @@ export const createTaskRunner = ({
         report: (workerReport) => postWorkerReport(task.id, workerReport),
         handBack: (inputId, reason) => handBack(task.id, inputId, reason),
         nothingToReport: () => nothingToReport(task.id),
-        pullRequestNumber: () =>
-          store.tasks.get(task.id)?.prNumber ?? undefined,
+        pullRequest: () => pullRequestOf(task.id),
         events: sessionEvents(task.id, () =>
           live !== undefined && liveSessions.get(task.id) === live
             ? live
@@ -433,6 +444,7 @@ export const createTaskRunner = ({
         hasNothingToReport: false,
         deliveredSinceReport: new Set(inputs.map(({ id }) => id)),
         handedBackInputIds: new Set(),
+        hasReportedDone: false,
       };
       liveSessions.set(task.id, live);
       logger.info(
@@ -463,9 +475,10 @@ export const createTaskRunner = ({
       .sort((left, right) => left.createdAt - right.createdAt);
   };
 
-  const endStoppedSessions = (): void => {
+  const endStoppedAndClosedSessions = (): void => {
     for (const [taskId, live] of liveSessions) {
-      if (live.isEnding || store.tasks.get(taskId)?.state !== "stopped") {
+      const isStopped = store.tasks.get(taskId)?.state === "stopped";
+      if (live.isEnding || !(isStopped || isClosedUnder(taskId, live))) {
         continue;
       }
       live.isEnding = true;
@@ -482,7 +495,7 @@ export const createTaskRunner = ({
 
   const reconcile = async (): Promise<void> => {
     if (!isRunning) return;
-    endStoppedSessions();
+    endStoppedAndClosedSessions();
     const startedLaunches: Promise<void>[] = [];
     for (const task of candidateTasks()) {
       const live = liveSessions.get(task.id);

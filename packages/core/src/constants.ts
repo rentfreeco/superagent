@@ -16,6 +16,8 @@ export const GITHUB_PAGE_SIZE = 100;
 export const GITHUB_MAX_PAGES = 10;
 
 export const PULL_REQUEST_POLL_INTERVAL_MS = 60_000;
+/** How often an unchanged head commit's checks are read again, for CI that starts late or is rerun. */
+export const PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS = 5 * 60_000;
 export const PULL_REQUEST_MAX_BOT_ROUNDS = 3;
 export const PULL_REQUEST_INPUT_MAX_LENGTH = 4_000;
 

@@ -1,4 +1,7 @@
-import { PULL_REQUEST_POLL_INTERVAL_MS } from "../constants.ts";
+import {
+  PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS,
+  PULL_REQUEST_POLL_INTERVAL_MS,
+} from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import type { Store } from "../store/open-store.ts";
 import type { Task } from "../store/tasks.ts";
@@ -27,6 +30,7 @@ export interface PullRequestWatcherOptions {
   wakeTaskRunner: () => void;
   logger: PullRequestWatcherLogger;
   pollIntervalMs?: number;
+  now?: () => number;
 }
 
 export interface PullRequestWatcher {
@@ -49,6 +53,7 @@ export const createPullRequestWatcher = ({
   wakeTaskRunner,
   logger,
   pollIntervalMs = PULL_REQUEST_POLL_INTERVAL_MS,
+  now = Date.now,
 }: PullRequestWatcherOptions): PullRequestWatcher => {
   let pollTimer: NodeJS.Timeout | undefined;
   let currentPoll: Promise<void> | undefined;
@@ -59,6 +64,10 @@ export const createPullRequestWatcher = ({
     const key = pullRequestPositionKey(task.id, number);
     const position = store.kv.get(key, pullRequestPositionSchema);
     if (position?.isClosed || position?.ownership === "foreign") return;
+    const readAt = now();
+    const areChecksStale =
+      readAt - (position?.checksReadAt ?? 0) >=
+      PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS;
     const snapshot = await readPullRequest({
       client,
       repository: repo.github,
@@ -66,7 +75,9 @@ export const createPullRequestWatcher = ({
       shouldReadDiscussion: ({ updated_at }) =>
         updated_at !== position?.updatedAt,
       shouldReadChecks: ({ head }) =>
-        head.sha !== position?.headSha || position.hasPendingChecks,
+        head.sha !== position?.headSha ||
+        position.hasPendingChecks ||
+        areChecksStale,
     });
     const hasNews = store.transaction(() => {
       const current = store.tasks.get(task.id);
@@ -78,6 +89,7 @@ export const createPullRequestWatcher = ({
         position,
         agentLogin,
         ownerLogin,
+        readAt,
       });
       const addedInputs = feedback.inputs.filter(
         ({ ref, text }) =>

@@ -124,7 +124,7 @@ const setup = ({
     }),
     handBack: () => ({ isAccepted: true, reply: "Handed back." }),
     nothingToReport: () => ({ isAccepted: true, reply: "Nothing posted." }),
-    pullRequestNumber: () => 6,
+    pullRequest: () => ({ repository: "pakgin/superagent", number: 6 }),
     events,
   });
   const [request] = requests;

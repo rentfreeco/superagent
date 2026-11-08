@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS,
+  PULL_REQUEST_POLL_INTERVAL_MS,
+} from "../constants.ts";
 import type { Repo } from "../repos/config.ts";
 import { openTestStore } from "../store/open-test-store.ts";
 import type { GitHubClient } from "./client.ts";
@@ -17,6 +21,8 @@ const owner = { login: "pakgin", type: "User" };
 interface FakeGitHub {
   pulls: Map<number, PullRequest>;
   comments: Map<number, unknown[]>;
+  /** Head commit SHA -> its check runs. */
+  checkRuns: Map<string, unknown[]>;
   failing: Set<number>;
 }
 
@@ -31,7 +37,11 @@ const fakeClient = (github: FakeGitHub, requests: string[]): GitHubClient => ({
     requests.push(path);
     const number = Number(path.match(/\/(?:pulls|issues)\/(\d+)/)?.[1]);
     if (github.failing.has(number)) throw new Error("github: answered 502");
-    if (path.includes("/check-runs")) return schema.parse({ check_runs: [] });
+    const sha = path.match(/\/commits\/(\w+)\/check-runs/)?.[1];
+    if (sha !== undefined) {
+      const runs = github.checkRuns.get(sha) ?? [];
+      return schema.parse({ total_count: runs.length, check_runs: runs });
+    }
     if (path.includes("/issues/") && path.includes("/comments")) {
       return schema.parse(
         path.includes("page=1") ? (github.comments.get(number) ?? []) : [],
@@ -64,10 +74,11 @@ const pullRequestFor = (
 });
 
 const setup = () => {
-  const { store } = openTestStore();
+  const { store, clock } = openTestStore();
   const github: FakeGitHub = {
     pulls: new Map(),
     comments: new Map(),
+    checkRuns: new Map(),
     failing: new Set(),
   };
   const requests: string[] = [];
@@ -83,6 +94,7 @@ const setup = () => {
     wakeOutbox,
     wakeTaskRunner,
     logger,
+    now: () => clock.now,
   });
   let nextOrigin = 1;
   const readyTaskWithPullRequest = (number: number) => {
@@ -109,6 +121,7 @@ const setup = () => {
       text: message.kind === "post" ? message.text : "",
     }));
   return {
+    clock,
     github,
     logger,
     posts,
@@ -217,6 +230,32 @@ describe("createPullRequestWatcher", () => {
       `pull-request-foreign:${task.id}:7`,
     ]);
     expect(requests.length).toBe(requestsAfterFirstPoll);
+  });
+
+  it("reads an unchanged head commit's checks again every five minutes, so CI that starts late or is rerun still counts", async () => {
+    const { clock, github, readyTaskWithPullRequest, store, watcher } = setup();
+    const task = readyTaskWithPullRequest(7);
+    await watcher.poll();
+    github.checkRuns.set("1111111", [
+      {
+        id: 91,
+        name: "test",
+        status: "completed",
+        conclusion: "failure",
+        html_url: "https://github.com/pakgin/scratch/runs/91",
+      },
+    ]);
+
+    clock.now += PULL_REQUEST_POLL_INTERVAL_MS;
+    await watcher.poll();
+    const inputsWithinInterval = store.inputs.unread(task.id).length;
+    clock.now += PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS;
+    await watcher.poll();
+
+    expect(inputsWithinInterval).toBe(0);
+    expect(store.inputs.unread(task.id)).toEqual([
+      expect.objectContaining({ ref: "github:check-run:91" }),
+    ]);
   });
 
   it("keeps polling the other pull requests when one fails", async () => {

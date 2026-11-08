@@ -24,6 +24,7 @@ import { REPORT_STATES, type WorkerReport } from "./record-report.ts";
 import { type ToolOutcome, toToolResult } from "./tool-outcome.ts";
 import { createWorkerGuard } from "./worker-guard.ts";
 import { workerInstructions } from "./worker-instructions.ts";
+import type { TaskPullRequest } from "./message-reactions.ts";
 
 export interface WorkerTurn {
   readInputIds: number[];
@@ -48,8 +49,8 @@ export interface WorkerSessionOptions {
   report(report: WorkerReport): ToolOutcome;
   handBack(inputId: number, reason: string): ToolOutcome;
   nothingToReport(): ToolOutcome;
-  /** The task's pull request number, once it has one. */
-  pullRequestNumber(): number | undefined;
+  /** The task's pull request, once it has one. */
+  pullRequest(): TaskPullRequest | undefined;
   events: WorkerSessionEvents;
 }
 
@@ -282,7 +283,7 @@ export const createClaudeSessionStarter =
     report,
     handBack,
     nothingToReport,
-    pullRequestNumber,
+    pullRequest,
     events,
   }) => {
     const gitDirectory = path.join(repo.path, ".git");
@@ -306,7 +307,7 @@ export const createClaudeSessionStarter =
                   gitDirectory,
                   baseBranch: repo.baseBranch,
                   homeDirectory,
-                  pullRequestNumber,
+                  pullRequest,
                 }),
               ],
               onFailure: "block",

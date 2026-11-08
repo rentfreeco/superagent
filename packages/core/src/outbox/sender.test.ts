@@ -391,6 +391,40 @@ describe("outbox sender", () => {
     expect(store.outbox.pending()).toEqual([]);
   });
 
+  it("doesn't start a GitHub comment when stopped while checking an interrupted one", async () => {
+    const { delivery, sender, store } = setup();
+    const lookup = Promise.withResolvers<boolean>();
+    const gitHub = {
+      comment: vi.fn(async () => undefined),
+      hasComment: vi.fn(() => lookup.promise),
+      react: vi.fn(async () => undefined),
+      unreact: vi.fn(async () => undefined),
+      classifyFailure: vi.fn((): OutboxFailure => ({ kind: "transient" })),
+    } satisfies OutboxGitHubDelivery;
+    const entryId =
+      store.outbox.enqueue({
+        dedupeKey: "report:4:github",
+        channel: "github:pakgin/scratch",
+        threadTs: "7",
+        message: {
+          kind: "github_comment",
+          repository: "pakgin/scratch",
+          issueNumber: 7,
+          text: "Fixed.",
+        },
+      })?.id ?? -1;
+    store.outbox.beginAttempt(entryId);
+
+    sender.start(delivery, gitHub);
+    await vi.waitFor(() => expect(gitHub.hasComment).toHaveBeenCalledOnce());
+    const stopped = sender.stop();
+    lookup.resolve(false);
+    await stopped;
+
+    expect(gitHub.comment).not.toHaveBeenCalled();
+    expect(store.outbox.get(entryId)?.status).toBe("pending");
+  });
+
   it("gives up on a GitHub entry when there's no GitHub account to deliver it with", async () => {
     const { delivery, logger, sender, store } = setup();
     store.outbox.enqueue({

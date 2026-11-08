@@ -106,7 +106,7 @@ describe("createGitHubDelivery", () => {
       },
       {
         method: "GET",
-        path: "/repos/pakgin/scratch/pulls/comments/21/reactions?content=eyes&per_page=100",
+        path: "/repos/pakgin/scratch/pulls/comments/21/reactions?content=eyes&per_page=100&page=1",
       },
       {
         method: "DELETE",

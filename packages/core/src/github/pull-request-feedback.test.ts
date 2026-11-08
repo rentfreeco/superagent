@@ -82,6 +82,7 @@ const feedback = ({
     position,
     agentLogin: "superagent-bot",
     ownerLogin: "pakgin",
+    readAt: 1_700_000_000_000,
   });
 
 describe("pullRequestFeedback", () => {
@@ -167,6 +168,7 @@ describe("pullRequestFeedback", () => {
       position: undefined,
       agentLogin: "superagent[bot]",
       ownerLogin: "pakgin",
+      readAt: 1_700_000_000_000,
     });
 
     expect(result.inputs).toEqual([]);
@@ -190,7 +192,10 @@ describe("pullRequestFeedback", () => {
       position: {
         ...UNREAD_POSITION,
         lastCommentId: 31,
-        lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+        commentVersions: {
+          "github:comment:30": "2026-11-07T09:00:00Z",
+          "github:comment:31": "2026-11-07T09:00:00Z",
+        },
       },
       discussion: {
         ...emptyDiscussion(),
@@ -228,7 +233,11 @@ describe("pullRequestFeedback", () => {
       ...UNREAD_POSITION,
       lastReviewCommentId: 21,
       lastCommentId: 32,
-      lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+      commentVersions: {
+        "github:review-comment:21": "2026-11-07T09:00:00Z",
+        "github:comment:31": "2026-11-07T09:00:00Z",
+        "github:comment:32": "2026-11-07T09:00:00Z",
+      },
     };
 
     const result = feedback({ discussion, position });
@@ -245,7 +254,11 @@ describe("pullRequestFeedback", () => {
       },
     ]);
     expect(result.position).toMatchObject({
-      lastCommentUpdatedAt: "2026-11-07T09:40:00Z",
+      commentVersions: {
+        "github:review-comment:21": "2026-11-07T09:20:00Z",
+        "github:comment:31": "2026-11-07T09:30:00Z",
+        "github:comment:32": "2026-11-07T09:40:00Z",
+      },
       botRounds: 1,
     });
     expect(again.inputs).toEqual([]);
@@ -262,7 +275,7 @@ describe("pullRequestFeedback", () => {
         ...UNREAD_POSITION,
         updatedAt: "2026-11-07T09:00:00Z",
         lastCommentId: 31,
-        lastCommentUpdatedAt: "2026-11-07T09:00:00Z",
+        commentVersions: { "github:comment:31": "2026-11-07T09:00:00Z" },
       },
     });
 
@@ -276,8 +289,48 @@ describe("pullRequestFeedback", () => {
     expect(next.inputs).toEqual([]);
   });
 
+  it("doesn't lose an edit that one list missed while the other read a newer comment", () => {
+    const reviewComment = (updatedAt: string) => ({
+      id: 21,
+      user: owner,
+      body: "Use a clearer name.",
+      path: "src/math.js",
+      line: 3,
+      updated_at: updatedAt,
+      html_url: "https://github.com/pakgin/scratch/pull/7#discussion_r21",
+    });
+    const newer = comment(32, owner, "and add a test", "2026-11-07T09:30:00Z");
+    const first = feedback({
+      discussion: {
+        ...emptyDiscussion(),
+        reviewComments: [reviewComment("2026-11-07T09:00:00Z")],
+        comments: [newer],
+      },
+      position: {
+        ...UNREAD_POSITION,
+        lastReviewCommentId: 21,
+        lastCommentId: 31,
+        commentVersions: { "github:review-comment:21": "2026-11-07T09:00:00Z" },
+      },
+    });
+
+    const next = feedback({
+      discussion: {
+        ...emptyDiscussion(),
+        reviewComments: [reviewComment("2026-11-07T09:20:00Z")],
+        comments: [newer],
+      },
+      position: first.position,
+    });
+
+    expect(first.inputs.map(({ ref }) => ref)).toEqual(["github:comment:32"]);
+    expect(next.inputs.map(({ ref }) => ref)).toEqual([
+      "github:review-comment:21:edited:2026-11-07T09:20:00Z",
+    ]);
+  });
+
   it("takes a position saved before edits were tracked as read up to its updatedAt", () => {
-    const { lastCommentUpdatedAt: _untracked, ...savedBefore } = {
+    const { commentVersions: _untracked, ...savedBefore } = {
       ...UNREAD_POSITION,
       updatedAt: "2026-11-07T10:00:00Z",
       lastCommentId: 31,
