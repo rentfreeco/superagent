@@ -110,6 +110,8 @@ Done in #13: the candidates and decisions tables, the decision functions with th
 
 ### M4 — Pull request feedback (in progress)
 
+Built in #16, waiting on a live run: the agent account, the watcher, the ownership checks, merge and close, the review instructions, and the guard covering `gh api`.
+
 - **The agent's own GitHub account, first.** Workers push, open pull requests, comment, and resolve review threads as the agent account, never as the owner, so the owner can review and approve its work and M4 can tell their comments from the agent's.
   - `.env` gets `SUPERAGENT_GITHUB_TOKEN`, a token for the agent account, and `SUPERAGENT_OWNER_GITHUB`, the owner's GitHub login.
   - At startup the bot asks GitHub whose token it is, and refuses to start if it's the owner's.

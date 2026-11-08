@@ -166,6 +166,27 @@ createClaudeSessionStarter({ gitHubAccount });
 - **Workers with an account** get its token as `GH_TOKEN`, so `gh` acts as the agent. Git pushes to GitHub over https with the same token, even where a remote is SSH and whatever credential helpers or SSH keys the machine has. Commits are authored as the agent.
 - **Without one,** workers use the machine's own `gh` and git logins, as before.
 
+```ts
+import { createPullRequestWatcher } from "@repo/core/github";
+
+const watcher = createPullRequestWatcher({
+  store,
+  client, // the agent's
+  repos, // repo name -> Repo
+  agentLogin: gitHubAccount.login,
+  ownerLogin: "octocat",
+  wakeOutbox: outboxSender.wake,
+  wakeTaskRunner: taskRunner.wake,
+  logger: console,
+});
+watcher.start(); // polls every minute; watcher.stop() on shutdown
+```
+
+- **What reaches the worker:** the owner's reviews and comments, installed bots' (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
+- **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. Anything else gets one note in the thread and is left alone.
+- **A merge or close** posts once in the thread and ends the task as done.
+- **Cost:** a quiet pull request takes one request a minute. Reviews and comments are read only when it changed, and checks only for a new head commit or while some are pending.
+
 ## `@repo/core/outbox`
 
 The sender that turns outbox rows into Slack posts and reactions. Everything the bot says goes through it, so a reply queued just before a crash still goes out after the restart.

@@ -139,6 +139,9 @@ export const createTaskRunner = ({
     return describeAcknowledgement(acknowledgedCount);
   };
 
+  const repositoryOf = (taskId: string): string | undefined =>
+    repos.get(store.tasks.get(taskId)?.repo ?? "")?.github;
+
   const handBack = (
     taskId: string,
     inputId: number,
@@ -185,7 +188,14 @@ export const createTaskRunner = ({
     taskId: string,
     workerReport: WorkerReport,
   ): ToolOutcome =>
-    settleReport(recordReport({ store, taskId, report: workerReport }));
+    settleReport(
+      recordReport({
+        store,
+        taskId,
+        report: workerReport,
+        repository: repositoryOf(taskId),
+      }),
+    );
 
   const postWorkerReport = (
     taskId: string,
@@ -194,7 +204,12 @@ export const createTaskRunner = ({
     const outcome = settleReport(
       store.transaction(() => {
         reopenReportedTask(taskId);
-        return recordReport({ store, taskId, report: workerReport });
+        return recordReport({
+          store,
+          taskId,
+          report: workerReport,
+          repository: repositoryOf(taskId),
+        });
       }),
     );
     return outcome;

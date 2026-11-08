@@ -82,6 +82,12 @@ packages/
                                owner's own, with the noreply address commits are authored with
         agent-account-environment.ts agentAccountEnvironment: gh, git pushes, and commit
                                identity as the agent, over the machine's own credentials
+        read-pull-request.ts   readPullRequest: a pull request, and only the parts that changed:
+                               reviews and comments, the head commit's check runs
+        pull-request-feedback.ts pullRequestFeedback: pure; a snapshot and the read position in,
+                               inputs, notices, whether the task is over, the new position out
+        pull-request-watcher.ts createPullRequestWatcher: every minute, each task's pull request,
+                               written in one transaction; the position in kv
         index.ts               the module's public exports
       outbox/                  @repo/core/outbox: turns outbox rows into Slack posts
         sender.ts              createOutboxSender: one pass at a time, woken on enqueue and
@@ -115,6 +121,8 @@ packages/
         take-reaction.ts       takeReaction: 🛑 on a task's first message, or on one of the
                                owner's messages in its thread, stops the task
         stop-task.ts           stopTask: what stopping does, for the word and the reaction
+        close-task.ts          closeTask: a merged or closed pull request ends its task as done
+        drop-unread-inputs.ts  dropUnreadInputs: what stopping and closing do to unread inputs
         runner.ts              createTaskRunner: starts queued tasks, pushes new inputs into live
                                sessions, resumes ended tasks on new input and running ones after
                                a restart, ends stopped and idle sessions, caps concurrency; gets
@@ -254,6 +262,18 @@ Every owner message no task owns, a DM or a mention outside a task's thread, is 
 - MUST: When a task takes over a thread, pass it the candidates still waiting there, in the same transaction (`decideStartTask` does). Otherwise a replay after a restart gives the waiting message to the task as a follow-up while its candidate is still routed.
 - A worker sees each Slack message as `[message N]`, the input's ID. Its `hand_back` names one and queues it as a new candidate naming the task and why, once per task. The task's first input, its request, can't be handed back. The worker doesn't report about a message it handed back, since the router answers it; when that was all the turn had to do, it calls `nothing_to_report`. The router never attaches it back to that task, and no task can start in that task's thread, so a new request there gets a reply asking for a new message.
 - `SUPERAGENT_ROUTER=off` runs the router without a session: the channel map decides every candidate as soon as it's queued.
+
+## Pull requests
+
+With superagent's own GitHub account set (`SUPERAGENT_GITHUB_TOKEN`), the pull request watcher (`@repo/core/github`) follows each task's pull request.
+
+- MUST: Let only the owner's words (`SUPERAGENT_OWNER_GITHUB`) and installed bots' reach a worker from GitHub. Drop other people's, as the Slack gate does, and the agent's own. It's the owner gate on GitHub; a stranger's comment on a public repo must never steer a worker.
+- MUST: Decide what a poll means in `pullRequestFeedback`, which is pure, and write it in one transaction. Inputs are deduped by `github:<kind>:<id>`, notices by their dedupe key, so a poll repeated after a crash adds nothing.
+- The read position lives in `kv` under `pull_request:<task id>:<number>`: the last review, review comment, and comment IDs (GitHub's IDs only grow), the head commit, its seen check runs, and the bot rounds. A poll reads reviews and comments only when the pull request's `updated_at` moved, and check runs only for a new head commit or while some are pending.
+- A pull request is the task's only on `agent/<task id>` in the task's repo. `recordReport` refuses a URL in another repo; the first poll marks a pull request off the branch, or from a fork, as foreign, tells the owner once, and never reads it again.
+- A merge or close posts once and calls `closeTask`, which drops unread inputs and moves the task to done from any state. A live session ends at its next turn.
+- CI and bots never wake a failed or stopped task. Bots get `PULL_REQUEST_MAX_BOT_ROUNDS` rounds per pull request.
+- The guard refuses merges, approvals, and closing issues through `gh api` too, including GraphQL `mergePullRequest` and `enablePullRequestAutoMerge`, since workers use `gh api` to resolve review threads and reply to comments.
 
 ## Slack
 

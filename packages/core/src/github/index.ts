@@ -5,6 +5,13 @@ export {
   type GitHubClientOptions,
 } from "./client.ts";
 export {
+  createPullRequestWatcher,
+  pullRequestPositionKey,
+  type PullRequestWatcher,
+  type PullRequestWatcherLogger,
+  type PullRequestWatcherOptions,
+} from "./pull-request-watcher.ts";
+export {
   type PullRequestFeedback,
   type PullRequestFeedbackRequest,
   pullRequestFeedback,

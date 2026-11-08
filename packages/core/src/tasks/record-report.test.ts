@@ -119,6 +119,28 @@ describe("recordReport", () => {
     expect(queuedPosts()).toEqual([]);
   });
 
+  it("turns down a pull request outside the task's repo, and takes one inside it whatever the case", () => {
+    const { store, task } = setup();
+    const reportIn = (prUrl: string) =>
+      recordReport({
+        store,
+        taskId: task.id,
+        report: { state: "ready", summary: "Fixed.", prUrl },
+        repository: "pakgin/superagent",
+      });
+
+    expect(reportIn("https://github.com/someone/else/pull/3")).toEqual({
+      isAccepted: false,
+      reply:
+        "Not posted: that pull request is in someone/else, and this task's repo is pakgin/superagent. Open it there, from your branch.",
+    });
+    expect(store.tasks.get(task.id)?.prNumber).toBeNull();
+    expect(
+      reportIn("https://github.com/Pakgin/SuperAgent/pull/42").isAccepted,
+    ).toBe(true);
+    expect(store.tasks.get(task.id)?.prNumber).toBe(42);
+  });
+
   it("turns down a report once the task isn't running, so a stopped task stays quiet", () => {
     const { queuedPosts, report, store, task } = setup();
     store.tasks.transition(task.id, "stopped");
