@@ -146,6 +146,26 @@ store.transaction(() => {
 
 `store.transaction(work)` runs synchronous work in one `BEGIN IMMEDIATE` transaction and rolls it all back if `work` throws. A transaction inside another joins the outer one. `openTestStore()` gives tests an in-memory store with a clock they can move.
 
+## `@repo/core/github`
+
+superagent's own GitHub account, so its pull requests, comments, and commits are never the owner's.
+
+```ts
+import { createGitHubClient, resolveAgentAccount } from "@repo/core/github";
+import { createClaudeSessionStarter } from "@repo/core/tasks";
+
+const gitHubAccount = await resolveAgentAccount({
+  client: createGitHubClient({ token }),
+  token, // a token for superagent's own account
+  ownerLogin: "octocat", // refused if the token is the owner's
+});
+createClaudeSessionStarter({ gitHubAccount });
+```
+
+- **`resolveAgentAccount`** asks GitHub whose the token is, refuses the owner's own account, and returns its login and GitHub's noreply address for it.
+- **Workers with an account** get its token as `GH_TOKEN`, so `gh` acts as the agent. Git pushes to GitHub over https with the same token, even where a remote is SSH and whatever credential helpers or SSH keys the machine has. Commits are authored as the agent.
+- **Without one,** workers use the machine's own `gh` and git logins, as before.
+
 ## `@repo/core/outbox`
 
 The sender that turns outbox rows into Slack posts and reactions. Everything the bot says goes through it, so a reply queued just before a crash still goes out after the restart.

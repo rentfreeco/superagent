@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createGitHubClient, resolveAgentAccount } from "@repo/core/github";
 import { createOutboxSender } from "@repo/core/outbox";
 import {
   recoverAfterRestart,
@@ -46,6 +47,19 @@ const describeRecovery = ({
 const main = async (): Promise<void> => {
   const environment = parseEnvironment(process.env);
   const { repos, channelRepos } = await loadConfig(CONFIG_PATH);
+  const gitHubAccount =
+    environment.gitHub === undefined
+      ? undefined
+      : await resolveAgentAccount({
+          client: createGitHubClient({ token: environment.gitHub.token }),
+          token: environment.gitHub.token,
+          ownerLogin: environment.gitHub.ownerLogin,
+        });
+  console.log(
+    gitHubAccount === undefined
+      ? "superagent: no SUPERAGENT_GITHUB_TOKEN, so workers use this machine's GitHub logins"
+      : `superagent: workers act on GitHub as ${gitHubAccount.login}`,
+  );
   const storePath = path.join(environment.dataDirectory, STORE_FILE_NAME);
   const store = openStore({ path: storePath });
   const recoverySnapshot = takeRecoverySnapshot({
@@ -67,6 +81,7 @@ const main = async (): Promise<void> => {
     worktreesDirectory,
     startSession: createClaudeSessionStarter({
       sandbox: environment.workerSandbox,
+      gitHubAccount,
     }),
     wakeOutbox: outboxSender.wake,
     wakeRouter: () => router.wake(),

@@ -76,6 +76,13 @@ packages/
         decisions.ts           what was decided for each candidate, why, and by the router or
                                the fallback; at most one per candidate
         open-test-store.ts     an in-memory store with a settable clock, for tests
+      github/                  @repo/core/github: superagent's own GitHub account
+        client.ts              createGitHubClient: GET with the token, answers parsed with zod
+        resolve-agent-account.ts resolveAgentAccount: whose the token is, refusing the
+                               owner's own, with the noreply address commits are authored with
+        agent-account-environment.ts agentAccountEnvironment: gh, git pushes, and commit
+                               identity as the agent, over the machine's own credentials
+        index.ts               the module's public exports
       outbox/                  @repo/core/outbox: turns outbox rows into Slack posts
         sender.ts              createOutboxSender: one pass at a time, woken on enqueue and
                                polled every second; checks before re-posting; stops cleanly
@@ -143,12 +150,13 @@ packages/
 apps/
   agent/                       the bot process; `pnpm dev` runs it with restarts on change
     src/
-      main.ts                  startup: environment, config, store, the recovery snapshot,
-                               connect, outbox sender, recovery, then the task runner and the
-                               router; on SIGINT / SIGTERM closes the sessions, disconnects,
+      main.ts                  startup: environment, config, the agent's GitHub account,
+                               store, the recovery snapshot, connect, outbox sender, recovery,
+                               then the task runner and the router; on SIGINT / SIGTERM closes the sessions, disconnects,
                                and closes the store
-      environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL and
-                               SUPERAGENT_DATA_DIR, checked with zod
+      environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL,
+                               SUPERAGENT_DATA_DIR, and the agent's GitHub account, checked
+                               with zod
       handle-message.ts        createMessageHandler: in one transaction, give a message in a
                                task's thread to takeFollowUp, or queue it for the router; wake
                                the outbox, the runner, and the router
@@ -231,6 +239,7 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 - Workers run in `dontAsk` mode with an allowlist of working tools, so no tool waits on a person. They load only those built-in tools (`WORKER_BUILT_IN_TOOLS`) and only the `superagent` MCP server (`strictMcpConfig`), so neither a repo's `.mcp.json` nor the machine's claude.ai connectors reach them. `SUPERAGENT_DATA_DIR` is refused inside a `.claude` directory, where workers couldn't edit files. `worker-guard.ts` refuses merges, approvals, closing issues, force pushes, pushes to the base branch, file writes outside the worktree and its checkout's `.git`, reads of credential files, and searches whose root holds them. It checks real paths, after symlinks, including credential directories that are themselves links.
 - The guard splits a shell command into the words of each command it runs (`utils/split-shell-commands.ts`, including `sh -c`, `$(…)`, and subshells), so a quoted PR body or commit message that mentions `gh pr merge` passes. It checks every word of each command, so a keyword or wrapper in front (`if`, `env -i`, `xargs`) doesn't hide one, and an unquoted mention such as `echo gh pr merge` is refused. It is still a guard rail, not a boundary: a command it can't see into, such as one built in a variable, gets past it. Bash can still reach whatever the service's user can, unless `SUPERAGENT_WORKER_SANDBOX=on` runs shell commands in Claude Code's sandbox, with writes limited to the worktree and the checkout's `.git` and network limited to GitHub and package registries. Run the service where that is acceptable, such as its own container or machine.
 - MUST: Pass workers only the environment they need. `claude-session.ts` keeps an allowlist (`WORKER_ENVIRONMENT_NAMES` and its prefixes): add a variable there, never pass the whole environment. It also sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: the runner ends a session whose turn goes idle, so a command a worker backgrounded would never finish.
+- MUST: Act on GitHub as superagent's own account when it has one, never the owner's. With `SUPERAGENT_GITHUB_TOKEN`, `agentAccountEnvironment` gives workers the agent's `GH_TOKEN`, a git credential helper that answers with it (after an empty `credential.helper` that drops the machine's own), `insteadOf` rewrites so SSH remotes for GitHub push over https, and the agent as commit author. Startup refuses a token that belongs to `SUPERAGENT_OWNER_GITHUB`.
 - NEVER: start a real Claude Code session in tests. Pass a fake `StartConversation` to `createClaudeSessionStarter`, or a fake `StartWorkerSession` to `createTaskRunner`.
 
 ## Router

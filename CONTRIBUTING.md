@@ -109,16 +109,18 @@ Workers don't ask before acting. A guard refuses merges, force pushes, pushes to
 
 The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `apps/agent/.env.example` and fill it in:
 
-| Variable                    | Value                                                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `SLACK_BOT_TOKEN`           | the Bot User OAuth Token, `xoxb-…`                                                                             |
-| `SLACK_APP_TOKEN`           | the app-level token with `connections:write`, `xapp-…`                                                         |
-| `SLACK_OWNER_ID`            | your member ID, `U…`                                                                                           |
-| `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                                                    |
-| `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live, outside any `.claude` directory; `~/.superagent` by default |
-| `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                                            |
-| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default                         |
-| `SUPERAGENT_ROUTER`         | optional: `off` lets the channel map decide every new message, without a router session; `on` by default       |
+| Variable                    | Value                                                                                                                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SLACK_BOT_TOKEN`           | the Bot User OAuth Token, `xoxb-…`                                                                                                                                                                  |
+| `SLACK_APP_TOKEN`           | the app-level token with `connections:write`, `xapp-…`                                                                                                                                              |
+| `SLACK_OWNER_ID`            | your member ID, `U…`                                                                                                                                                                                |
+| `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                                                                                                                                         |
+| `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live, outside any `.claude` directory; `~/.superagent` by default                                                                                      |
+| `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                                                                                                                                 |
+| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default                                                                                                              |
+| `SUPERAGENT_ROUTER`         | optional: `off` lets the channel map decide every new message, without a router session; `on` by default                                                                                            |
+| `SUPERAGENT_GITHUB_TOKEN`   | optional: a token for superagent's own GitHub account, with write access to each configured repo; workers push, open pull requests, and comment as it. Unset, they use this machine's GitHub logins |
+| `SUPERAGENT_OWNER_GITHUB`   | required with `SUPERAGENT_GITHUB_TOKEN`: your GitHub login, so superagent can tell your comments from its own, and refuse a token that's yours                                                      |
 
 The bot checks all of them at startup and stops with an error naming each one that is missing or malformed, such as the two tokens swapped. `LOG_LEVEL=debug` also logs every event the owner gate drops, which helps when the bot seems to ignore a message. Never commit a token.
 

@@ -20,7 +20,31 @@ describe("parseEnvironment", () => {
       dataDirectory: path.join(homedir(), ".superagent"),
       workerSandbox: false,
       router: true,
+      gitHub: undefined,
     });
+  });
+
+  it("takes superagent's own GitHub account with the owner's GitHub login, and refuses the token without it", () => {
+    expect(
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_GITHUB_TOKEN: "github_pat_agent",
+        SUPERAGENT_OWNER_GITHUB: "pakgin",
+      }).gitHub,
+    ).toEqual({ token: "github_pat_agent", ownerLogin: "pakgin" });
+    expect(() =>
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_GITHUB_TOKEN: "github_pat_agent",
+      }),
+    ).toThrow(/needs your GitHub login[\s\S]*SUPERAGENT_OWNER_GITHUB/);
+    expect(() =>
+      parseEnvironment({
+        ...slackVariables,
+        SUPERAGENT_GITHUB_TOKEN: "github_pat_agent",
+        SUPERAGENT_OWNER_GITHUB: "not a login",
+      }),
+    ).toThrow(/must be your GitHub login/);
   });
 
   it("turns the router off only for SUPERAGENT_ROUTER=off", () => {

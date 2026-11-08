@@ -8,6 +8,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { WORKER_EFFORT, WORKER_MODEL } from "../constants.ts";
+import { agentAccountEnvironment } from "../github/agent-account-environment.ts";
+import type { AgentAccount } from "../github/resolve-agent-account.ts";
 import type { Repo } from "../repos/config.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
@@ -66,6 +68,8 @@ export interface ClaudeSessionStarterOptions {
   homeDirectory?: string;
   /** Run the worker's shell commands in Claude Code's sandbox. */
   sandbox?: boolean;
+  /** Act on GitHub as this account; without one, workers use the machine's own GitHub logins. */
+  gitHubAccount?: AgentAccount | undefined;
 }
 
 export const WORKER_SERVER_NAME = "superagent";
@@ -264,6 +268,7 @@ export const createClaudeSessionStarter =
     environment = process.env,
     homeDirectory = homedir(),
     sandbox = false,
+    gitHubAccount,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
   ({
     task,
@@ -324,7 +329,13 @@ export const createClaudeSessionStarter =
             ],
           }),
         },
-        env: { ...agentEnvironment(environment), ...WORKER_FIXED_ENVIRONMENT },
+        env: {
+          ...agentEnvironment(environment),
+          ...(gitHubAccount === undefined
+            ? {}
+            : agentAccountEnvironment(gitHubAccount)),
+          ...WORKER_FIXED_ENVIRONMENT,
+        },
         title: task.title,
       },
       prompts: inputs.map(toAgentPrompt),

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Repo } from "../repos/config.ts";
+import type { AgentAccount } from "../github/resolve-agent-account.ts";
 import type { TaskInput } from "../store/inputs.ts";
 import type { Task } from "../store/tasks.ts";
 import { createAsyncQueue } from "../utils/create-async-queue.ts";
@@ -69,11 +70,13 @@ const setup = ({
   conversationMessages = createAsyncQueue<unknown>(),
   iterate = () => conversationMessages[Symbol.asyncIterator](),
   sandbox = false,
+  gitHubAccount,
 }: {
   task?: Task;
   conversationMessages?: ReturnType<typeof createAsyncQueue<unknown>>;
   iterate?: AgentConversation[typeof Symbol.asyncIterator];
   sandbox?: boolean;
+  gitHubAccount?: AgentAccount;
 } = {}) => {
   const requests: ConversationRequest[] = [];
   const conversation = {
@@ -104,6 +107,7 @@ const setup = ({
     },
     homeDirectory: "/home/agent",
     sandbox,
+    gitHubAccount,
   })({
     task,
     repo: superagentRepo,
@@ -214,6 +218,25 @@ describe("createClaudeSessionStarter", () => {
     );
     expect(decision).toMatchObject({
       hookSpecificOutput: { permissionDecision: "deny" },
+    });
+  });
+
+  it("acts on GitHub as the agent's own account when it has one, never the machine's", () => {
+    const { request } = setup({
+      gitHubAccount: {
+        token: "ghp_agent",
+        login: "superagent-bot",
+        email: "4242+superagent-bot@users.noreply.github.com",
+      },
+    });
+
+    expect(request.options.env).toMatchObject({
+      GH_TOKEN: "ghp_agent",
+      GIT_AUTHOR_NAME: "superagent-bot",
+      GIT_COMMITTER_EMAIL: "4242+superagent-bot@users.noreply.github.com",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     });
   });
 
