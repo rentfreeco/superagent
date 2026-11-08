@@ -9,10 +9,11 @@ import { closeTask } from "../tasks/close-task.ts";
 import { describeError } from "../utils/describe-error.ts";
 import type { GitHubClient } from "./client.ts";
 import {
+  isTaskBranch,
   pullRequestFeedback,
   pullRequestPositionSchema,
 } from "./pull-request-feedback.ts";
-import { readPullRequest } from "./read-pull-request.ts";
+import { type PullRequest, readPullRequest } from "./read-pull-request.ts";
 
 export interface PullRequestWatcherLogger {
   info(message: string): void;
@@ -68,16 +69,22 @@ export const createPullRequestWatcher = ({
     const areChecksStale =
       readAt - (position?.checksReadAt ?? 0) >=
       PULL_REQUEST_CHECKS_RECHECK_INTERVAL_MS;
+    /** Reviews, comments, and checks only matter on an open pull request that is the task's, so a closed or foreign one is settled without them. */
+    const isFollowed = (pullRequest: PullRequest) =>
+      pullRequest.state === "open" &&
+      (position !== undefined || isTaskBranch(pullRequest, task.id));
     const snapshot = await readPullRequest({
       client,
       repository: repo.github,
       number,
-      shouldReadDiscussion: ({ updated_at }) =>
-        updated_at !== position?.updatedAt,
-      shouldReadChecks: ({ head }) =>
-        head.sha !== position?.headSha ||
-        position.hasPendingChecks ||
-        areChecksStale,
+      shouldReadDiscussion: (pullRequest) =>
+        isFollowed(pullRequest) &&
+        pullRequest.updated_at !== position?.updatedAt,
+      shouldReadChecks: (pullRequest) =>
+        isFollowed(pullRequest) &&
+        (pullRequest.head.sha !== position?.headSha ||
+          position.hasPendingChecks ||
+          areChecksStale),
     });
     const hasNews = store.transaction(() => {
       const current = store.tasks.get(task.id);

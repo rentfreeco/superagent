@@ -195,6 +195,7 @@ describe("createPullRequestWatcher", () => {
     const requestsAfterMerge = requests.length;
     await watcher.poll();
 
+    expect(requests).toEqual(["/repos/pakgin/scratch/pulls/7"]);
     expect(store.tasks.get(task.id)?.state).toBe("done");
     expect(store.inputs.unread(task.id)).toEqual([]);
     expect(posts()).toEqual([
@@ -226,6 +227,7 @@ describe("createPullRequestWatcher", () => {
     const requestsAfterFirstPoll = requests.length;
     await watcher.poll();
 
+    expect(requests).toEqual(["/repos/pakgin/scratch/pulls/7"]);
     expect(posts().map(({ dedupeKey }) => dedupeKey)).toEqual([
       `pull-request-foreign:${task.id}:7`,
     ]);

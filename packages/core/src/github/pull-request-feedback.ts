@@ -103,7 +103,7 @@ export const UNREAD_POSITION: PullRequestPosition = {
   botRounds: 0,
 };
 
-const isTaskBranch = ({ head, base }: PullRequest, taskId: string) =>
+export const isTaskBranch = ({ head, base }: PullRequest, taskId: string) =>
   head.ref === `agent/${taskId}` &&
   head.repo?.full_name.toLowerCase() === base.repo.full_name.toLowerCase();
 
