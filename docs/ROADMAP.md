@@ -36,7 +36,7 @@ superagent is a Slack, multi-repo take on DeepSeek's [dsh-superagent](https://gi
 | Team prompt sections                                      | ✓                                                                          | The repo's `CLAUDE.md` and fixed instructions                                                               | M5                                                                      |
 | Panel, pause                                              | ✓                                                                          | The router's `list_tasks` answers "what's waiting on me?"                                                   | Status done in #13; pause in M5; the panel left out                     |
 | Proactive rules                                           | ✓                                                                          | —                                                                                                           | M6                                                                      |
-| Isolation                                                 | Full access, a dedicated OS user                                           | `dontAsk`, a tool allowlist, a guard, an environment allowlist; the sandbox is opt-in                       | Done; the sandbox untried; container in M5                              |
+| Isolation                                                 | Full access, a dedicated OS user                                           | `dontAsk`, a tool allowlist, a guard, an environment allowlist; the sandbox is opt-in                       | Done; the sandbox tried on macOS (#19); container in M5                 |
 
 Known risks:
 
@@ -47,7 +47,6 @@ Known risks:
   - an owner ID set to the bot's own was silently ignored;
   - hand-back turns posted filler, and ignored messages got no sign they were read.
 - Still unexercised:
-  - the opt-in sandbox;
   - another person's message in a task thread, which needs a second Slack user;
   - `nothing_to_report` in Slack;
   - a Greptile summary edit reaching the worker (an owner's edit did, live);
@@ -56,6 +55,7 @@ Known risks:
 - The router follows its instructions loosely at times. In a resumed session it ignored a repeated question despite the rule to answer again. An ignored message still gets a reaction (#15).
 - Claude Code keeps session transcripts under `~/.claude`. In a container they must live on the volume, or resuming a task breaks after a restart.
 - Without `SUPERAGENT_GITHUB_TOKEN`, pull requests open as your own GitHub account, GitHub doesn't let you approve your own PR, and pull requests aren't watched.
+- Until #19, the agent's commits were signed with the owner's GPG key, since the machine's git config signs commits. They read as signed by a key unknown to the agent account.
 - The worker's summary posts as it wrote it, in Slack or on the pull request. The length limit is an instruction, not enforced.
 - Greptile rewrites its summary after every push, and each rewrite uses one of a bot's three rounds on that pull request. After about three pushes, Greptile's new findings are dropped there.
 - When Greptile re-scores a pull request and nothing needs doing, the worker still posts a one-line comment saying so.
@@ -68,7 +68,7 @@ The order: M2's last checks (the sandbox and a second run), then M5 and M6.
 
 The Slack gateway and owner gate, channel → repo routing, the SQLite store, the outbox, and restart recovery.
 
-### M2 — Finish the worker loop (smoke-tested; the sandbox and a second run left)
+### M2 — Finish the worker loop (smoke-tested; the sandbox tried; a second run left)
 
 Done: the task runner, worktrees, the `ack`, `read_thread`, and `report` tools, follow-ups into live sessions, resume after a restart, `stop`, thread replies without a mention, stop by 🛑, and locked-down workers (`dontAsk`, the tool allowlist, the guard, the environment allowlist, and the instructions).
 
@@ -85,8 +85,15 @@ Left:
 
 - **Checked on 2026-11-08:** the bot finds its own earlier posts by their metadata. `findOwnPost`, run against real Slack, found 8 of 8 recent posts at the ts the outbox recorded, and nothing for a made-up key. Every post is a thread reply, so the thread lookup is the one that runs.
 - **Still to check:** that another person's message in a task thread never reaches the worker, which needs a second Slack user.
-- **The sandbox:** it's opt-in (`SUPERAGENT_WORKER_SANDBOX=on`). Try it next: `git push` over SSH, worktree commits into the checkout's `.git`, and package installs. If it holds, make it the default.
-- **Done when:** the smoke test passes twice in a row; no one else's thread message reaches a worker; a sandboxed worker can't write outside its worktree or merge.
+- **The sandbox, tried on 2026-11-08** on macOS, with a real worker session through `createClaudeSessionStarter` in a fresh worktree of the scratch repo:
+  - it holds: a write to the home directory and a request to a host off the allowlist were refused;
+  - worktree writes, `git ls-remote`, and `git push --dry-run` over https with the agent's token work;
+  - `git commit` failed because the machine signs commits with the owner's key, and `npm install` couldn't write its cache in `~/.npm`. #19 fixes both: the agent's commits are unsigned, and package managers cache in `$SUPERAGENT_DATA_DIR/cache`, which the sandbox lets workers write;
+  - `gh` can't verify TLS inside it on macOS, since Go asks `trustd`, which the sandbox blocks. With `enableWeakerNetworkIsolation` it works (tried), at the cost in open decision 2.
+
+  It stays opt-in until that decision. On Linux `gh` reads certificates from files, so the container in M5 shouldn't need it.
+
+- **Done when:** the smoke test passes twice in a row; no one else's thread message reaches a worker; a sandboxed worker can't write outside its worktree or merge. The last holds: the trial's write outside was refused, and the guard refuses merges, sandbox or not.
 
 ### M3 — Router (done)
 
@@ -189,7 +196,7 @@ Live runs and Greptile's review of #16 led to these, all in #16:
 ## Open decisions
 
 1. Should the router rewrite worker reports into short Slack messages, as dsh-superagent does, or should workers keep posting directly? Leaning: post directly, with a hard length cap.
-2. The worker sandbox on macOS as well, or only in the Linux container?
+2. The worker sandbox on macOS as well, or only in the Linux container? On macOS, workers need `enableWeakerNetworkIsolation` for `gh`, which opens `trustd` to sandboxed commands, a path the SDK warns could carry data out. Leaning: turn it on with the sandbox on macOS, since a sandbox with that gap still beats none, and rely on the container in M5.
 3. A word limit on posts, like dsh-superagent's 100?
 
 Decided: superagent gets its own GitHub account, as the first step of M4.
