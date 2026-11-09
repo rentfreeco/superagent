@@ -18,6 +18,7 @@ import {
   createReportTool,
   WORKER_BUILT_IN_TOOLS,
   WORKER_SERVER_NAME,
+  type WorkerSandbox,
 } from "./claude-session.ts";
 import type { WorkerReport } from "./record-report.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
@@ -70,13 +71,13 @@ const setup = ({
   task = queuedTask,
   conversationMessages = createAsyncQueue<unknown>(),
   iterate = () => conversationMessages[Symbol.asyncIterator](),
-  sandbox = false,
+  sandbox,
   gitHubAccount,
 }: {
   task?: Task;
   conversationMessages?: ReturnType<typeof createAsyncQueue<unknown>>;
   iterate?: AgentConversation[typeof Symbol.asyncIterator];
-  sandbox?: boolean;
+  sandbox?: WorkerSandbox;
   gitHubAccount?: AgentAccount;
 } = {}) => {
   const requests: ConversationRequest[] = [];
@@ -258,8 +259,8 @@ describe("createClaudeSessionStarter", () => {
     });
   });
 
-  it("runs shell commands in the sandbox when asked, writing only to the worktree and the checkout's git directory", () => {
-    const { request } = setup({ sandbox: true });
+  it("runs shell commands in the sandbox when asked, writing only to the worktree, the checkout's git directory, and the package caches", () => {
+    const { request } = setup({ sandbox: { cacheDirectory: "/data/cache" } });
 
     expect(request.options.sandbox).toMatchObject({
       enabled: true,
@@ -267,9 +268,23 @@ describe("createClaudeSessionStarter", () => {
       allowUnsandboxedCommands: false,
       network: { allowedDomains: expect.arrayContaining(["github.com"]) },
       filesystem: {
-        allowWrite: ["/data/worktrees/abcd2345", "/code/superagent/.git"],
+        allowWrite: [
+          "/data/worktrees/abcd2345",
+          "/code/superagent/.git",
+          "/data/cache",
+        ],
       },
     });
+    expect(request.options.env).toMatchObject({
+      XDG_CACHE_HOME: "/data/cache",
+      npm_config_cache: "/data/cache/npm",
+    });
+  });
+
+  it("leaves the machine's caches alone outside the sandbox", () => {
+    const { request } = setup();
+
+    expect(request.options.env).not.toHaveProperty("npm_config_cache");
   });
 
   it("resumes the task's session when it has one", () => {

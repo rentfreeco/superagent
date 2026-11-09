@@ -70,9 +70,14 @@ export interface ClaudeSessionStarterOptions {
   environment?: Readonly<Record<string, string | undefined>>;
   homeDirectory?: string;
   /** Run the worker's shell commands in Claude Code's sandbox. */
-  sandbox?: boolean;
+  sandbox?: WorkerSandbox | undefined;
   /** Act on GitHub as this account; without one, workers use the machine's own GitHub logins. */
   gitHubAccount?: AgentAccount | undefined;
+}
+
+export interface WorkerSandbox {
+  /** Where package managers cache, the one place outside the worktree a sandboxed worker writes. */
+  cacheDirectory: string;
 }
 
 export const WORKER_SERVER_NAME = "superagent";
@@ -169,13 +174,22 @@ export const agentEnvironment = (
 const workerSandbox = (
   worktree: Worktree,
   gitDirectory: string,
+  { cacheDirectory }: WorkerSandbox,
 ): SandboxSettings => ({
   enabled: true,
   failIfUnavailable: true,
   autoAllowBashIfSandboxed: true,
   allowUnsandboxedCommands: false,
   network: { allowedDomains: WORKER_SANDBOX_DOMAINS },
-  filesystem: { allowWrite: [worktree.path, gitDirectory] },
+  filesystem: { allowWrite: [worktree.path, gitDirectory, cacheDirectory] },
+});
+
+/** Package managers cache under the home directory, which the sandbox doesn't let workers write. */
+const sandboxCacheEnvironment = ({ cacheDirectory }: WorkerSandbox) => ({
+  XDG_CACHE_HOME: cacheDirectory,
+  npm_config_cache: path.join(cacheDirectory, "npm"),
+  YARN_CACHE_FOLDER: path.join(cacheDirectory, "yarn"),
+  PIP_CACHE_DIR: path.join(cacheDirectory, "pip"),
 });
 
 export const createAckTool = (ack: WorkerSessionOptions["ack"]) =>
@@ -270,7 +284,7 @@ export const createClaudeSessionStarter =
     startConversation = query,
     environment = process.env,
     homeDirectory = homedir(),
-    sandbox = false,
+    sandbox,
     gitHubAccount,
   }: ClaudeSessionStarterOptions = {}): StartWorkerSession =>
   ({
@@ -314,7 +328,9 @@ export const createClaudeSessionStarter =
             },
           ],
         },
-        ...(sandbox ? { sandbox: workerSandbox(worktree, gitDirectory) } : {}),
+        ...(sandbox === undefined
+          ? {}
+          : { sandbox: workerSandbox(worktree, gitDirectory, sandbox) }),
         settingSources: ["project"],
         systemPrompt: {
           type: "preset",
@@ -339,6 +355,7 @@ export const createClaudeSessionStarter =
           ...(gitHubAccount === undefined
             ? {}
             : agentAccountEnvironment(gitHubAccount)),
+          ...(sandbox === undefined ? {} : sandboxCacheEnvironment(sandbox)),
           ...WORKER_FIXED_ENVIRONMENT,
         },
         title: task.title,

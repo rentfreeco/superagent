@@ -18,6 +18,7 @@ import { SlackGateway } from "@repo/core/slack";
 import { openStore } from "@repo/core/store";
 import { createClaudeSessionStarter, createTaskRunner } from "@repo/core/tasks";
 import {
+  CACHE_DIRECTORY_NAME,
   CONFIG_PATH,
   ROUTER_DIRECTORY_NAME,
   STORE_FILE_NAME,
@@ -84,12 +85,19 @@ const main = async (): Promise<void> => {
     environment.dataDirectory,
     WORKTREES_DIRECTORY_NAME,
   );
+  const cacheDirectory = path.join(
+    environment.dataDirectory,
+    CACHE_DIRECTORY_NAME,
+  );
+  if (environment.workerSandbox) {
+    await mkdir(cacheDirectory, { recursive: true });
+  }
   const taskRunner = createTaskRunner({
     store,
     repos,
     worktreesDirectory,
     startSession: createClaudeSessionStarter({
-      sandbox: environment.workerSandbox,
+      sandbox: environment.workerSandbox ? { cacheDirectory } : undefined,
       gitHubAccount,
     }),
     wakeOutbox: outboxSender.wake,
