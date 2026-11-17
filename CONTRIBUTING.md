@@ -167,7 +167,7 @@ pnpm test         # vitest across the repo
 pnpm format       # prettier --write on ts, tsx and md files
 ```
 
-`pnpm --filter agent start` runs the bot once, without watching. `pnpm build` exists as well, but no workspace defines a build yet.
+`pnpm --filter agent start` runs the bot once, without watching. There is no build step: Node 24 runs the TypeScript source directly.
 
 To target one workspace, filter by its package name:
 

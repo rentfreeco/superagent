@@ -20,7 +20,10 @@ export interface Repo extends RepoConfig {
 const repoConfigSchema = z.strictObject({
   github: z
     .string()
-    .regex(/^[\w.-]+\/[\w.-]+$/, "must be owner/name, like pakgin/superagent"),
+    .regex(
+      /^[\w.-]+\/[\w.-]+$/,
+      "must be owner/name, like rentfreeco/superagent",
+    ),
   path: z.string().min(1),
   baseBranch: z.string().min(1),
   description: z.string().min(1).optional(),
