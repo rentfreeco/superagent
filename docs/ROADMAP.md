@@ -106,6 +106,7 @@ Done in #13: the candidates and decisions tables, the decision functions with th
   - `reply(text)`: a short answer or one question;
   - `attach(task_id)`: only when the message points at a task explicitly;
   - `stop(task_id)`;
+  - `ignore`, which lets a message be, with a reaction;
   - `list_tasks`, which answers "what's waiting on me?" in place of a panel.
 - **A worker `hand_back(message_id, reason)` tool** for a follow-up that isn't about its task. Each Slack message reaches the worker labeled `[message N]`, and the worker names the one it hands back.
 - **A `description` for each repo** in `superagent.config.ts`, so the router can choose.
@@ -146,7 +147,7 @@ Live runs and Greptile's review of #16 led to these, all in #16:
   - Workers get the token as `GH_TOKEN`. Git pushes to GitHub over https with that token, even where a remote is SSH, and commits are authored as the agent.
   - The agent account needs write access to each repo in the config.
 - **Poll every 60 seconds** for each task with an open PR: its state, reviews, review comments, comments, and the checks on its head commit. A read position per PR is kept in `kv`.
-- **A PR is the task's** only when it's in the task's repo and its branch is `agent/<task id>`. The repo is checked when the worker reports the URL, and the branch on the first poll. A PR that fails either is left alone, and the owner is told once.
+- **A PR is the task's** only when it's in the task's repo and its branch is `agent/<task id>`. The repo is checked when the worker reports the URL, which turns down a PR in another repo and tells the worker why. The branch is checked on the first poll, and a PR off it, or from a fork, is left alone, and the owner is told once.
 - **Whose words count:** only the owner's (`SUPERAGENT_OWNER_GITHUB`) and installed bots', such as automated reviewers and CI. Other people's comments are dropped, as other people's Slack messages are: it's the owner gate on GitHub, and it keeps a stranger's comment on a public repo from steering a worker. The agent's own comments are dropped too.
 - **What wakes the worker:**
   - the owner's reviews and comments, and failed checks on the head commit, become inputs that wake the task;

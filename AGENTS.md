@@ -43,8 +43,8 @@ packages/
         index.ts               the module's public exports
       slack/                   @repo/core/slack: the bot's Socket Mode connection
         gateway.ts             SlackGateway: connect (auth.test, then Bolt App, then start),
-                               fetchThread, post, react, findPost, classifyFailure, replay,
-                               catchUp, close
+                               fetchThread, post, react, unreact, findPost, classifyFailure,
+                               replay, catchUp, close
         resolve-bot-identity.ts resolveBotIdentity: the bot's IDs from auth.test, refusing a
                                token with none or an owner ID that is the bot's own
         inbound.ts             the global gate (record the event once, then self, then owner,
@@ -79,7 +79,9 @@ packages/
                                message and once more per task that hands one back
         decisions.ts           what was decided for each candidate, why, and by the router or
                                the fallback; at most one per candidate
-        open-test-store.ts     an in-memory store with a settable clock, for tests
+        open-test-store.ts     an in-memory store with a settable clock, for tests; imported
+                               directly, not exported
+        index.ts               the module's public exports
       github/                  @repo/core/github: superagent's own GitHub account
         client.ts              createGitHubClient: GET, POST, and DELETE with the token,
                                answers parsed with zod, GitHubRequestError with the status
@@ -175,8 +177,11 @@ packages/
         index.ts               the module's public exports
       utils/                   small helpers, one per file
       constants.ts             magic numbers: SQLite busy timeout, outbox backoff and polling,
-                               Slack delivery timeout, task IDs and titles, the session cap, the
-                               worker's model and effort
+                               Slack delivery timeout, task IDs and titles, the session cap and
+                               runner poll, the worker's model and effort, the thread read
+                               limit, reaction names, the router's settings and timeout, the
+                               recovery window, GitHub API paging, and pull request polling,
+                               bot rounds, and input length
     slack-app-manifest.json    the Slack app's events, scopes, and Socket Mode switch
   eslint-config/               PRIVATE  shared ESLint flat config (Babel parser for TS)
   typescript-config/           PRIVATE  shared tsconfig bases
@@ -185,10 +190,12 @@ apps/
     src/
       main.ts                  startup: environment, config, the agent's GitHub account,
                                store, the recovery snapshot, connect, outbox sender, recovery,
-                               then the task runner and the router; on SIGINT / SIGTERM closes the sessions, disconnects,
-                               and closes the store
+                               then the task runner, the router, and the pull request watcher;
+                               on SIGINT / SIGTERM stops the router and the watcher, closes the
+                               sessions, disconnects, and closes the store
       environment.ts           parseEnvironment: the Slack settings, LOG_LEVEL,
-                               SUPERAGENT_DATA_DIR, and the agent's GitHub account, checked
+                               SUPERAGENT_DATA_DIR, SUPERAGENT_WORKER_SANDBOX,
+                               SUPERAGENT_ROUTER, and the agent's GitHub account, checked
                                with zod
       handle-message.ts        createMessageHandler: in one transaction, give a message in a
                                task's thread to takeFollowUp, or queue it for the router; wake
@@ -197,7 +204,8 @@ apps/
                                the event, wake the outbox and runner
       constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
                                STORE_FILE_NAME, WORKTREES_DIRECTORY_NAME,
-                               ROUTER_DIRECTORY_NAME, and CACHE_DIRECTORY_NAME
+                               ROUTER_DIRECTORY_NAME, CACHE_DIRECTORY_NAME, and
+                               CLAUDE_DIRECTORY_NAME (where SUPERAGENT_DATA_DIR can't be)
     .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
@@ -338,7 +346,7 @@ pnpm test
 ## Git and authorization
 
 - MUST: Never push to `main`, force-push, or merge a pull request without fresh, explicit user confirmation for that exact action.
-- MUST: Write commits as Conventional Commits, `type(scope): summary`, scoped to the workspace you touched (`core`, `eslint-config`, `typescript-config`, or `repo` for the root). Branches are `type/short-description`. `CONTRIBUTING.md` has the full process.
+- MUST: Write commits as Conventional Commits, `type(scope): summary`, scoped to the workspace you touched (`core`, `agent`, `eslint-config`, `typescript-config`, or `repo` for the root). Branches are `type/short-description`. `CONTRIBUTING.md` has the full process.
 - MUST: Never commit a token or `superagent.config.ts`. `.env`, `.env.local`, and `superagent.config.ts` are git-ignored.
 - Nothing is published to npm, so there is no release process to authorize.
 
@@ -347,5 +355,5 @@ pnpm test
 - `CONTRIBUTING.md`: setup, a Slack app of your own, and the pull request process
 - `docs/ROADMAP.md`: what is built, the milestones left, and what superagent leaves out of dsh-superagent on purpose
 - `packages/core/README.md`: what `@repo/core/slack` lets through and why
-- `node_modules/turbo/docs/`: Turborepo docs matching the installed version (see the block at the top)
+- `node_modules/turbo/docs/`: Turborepo docs matching the installed version; read them before changing `turbo.json`
 - `packages/core/node_modules/@slack/bolt/dist/`: Bolt 5 source and types

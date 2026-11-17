@@ -40,8 +40,8 @@ For anything larger than a bug fix, open an issue describing the change before y
 
 1. Create a branch from `main` named `type/short-description`, for example `feat/repo-routing` or `fix/thread-pagination`. Keep each pull request focused on one change, and separate refactors from behavior changes.
 2. Write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/) form: `type(scope): summary`.
-   - Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`.
-   - Scope is the workspace you touched, without the `@repo/` prefix: `core`, `eslint-config`, `typescript-config`, or `repo` for changes at the root.
+   - Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `ci`.
+   - Scope is the workspace you touched, without the `@repo/` prefix: `core`, `agent`, `eslint-config`, `typescript-config`, or `repo` for changes at the root.
    - Examples: `chore(repo): remove ui package`, `feat(core): add slack module with Socket Mode gateway`.
 3. Before pushing, run the full check from the repository root and make sure all of it passes:
 
@@ -89,19 +89,19 @@ A change that needs a new scope or event updates the manifest in the same pull r
 
 ### Repo config
 
-Which repo a request is about comes from the channel it is sent in. Copy `superagent.config.example.ts` to `superagent.config.ts`, which is git-ignored, and fill it in:
+The router decides which configured repo a request is about, and a mapped channel's repo is its default. Copy `superagent.config.example.ts` to `superagent.config.ts`, which is git-ignored, and fill it in:
 
 - `repos`: one entry per repo, with its GitHub `owner/name`, the path to a local git checkout (relative to the config file, or starting with `~`), its base branch, and optionally a `description` the router reads to tell repos apart.
 - `channels`: Slack channel ID → repo name. Use the ID, not the channel name: open the channel, click its name, and copy the ID from the bottom of the **About** tab. Then invite the bot to the channel with `/invite @superagent`.
 
-The config is validated when it loads, and a mistake stops startup with an error that names it: a misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a path that isn't a git checkout. In a mapped channel, @-mention the bot. A DM, or a mention in an unmapped channel, gets a reply saying what to do instead.
+The config is validated when it loads, and a mistake stops startup with an error that names it: a misspelled key, a channel name in place of an ID, a channel pointing at a repo that isn't defined, or a path that isn't a git checkout. @-mention the bot in a channel, or DM it. The router can start a task in any configured repo, answer, or ask which repo you mean. With `SUPERAGENT_ROUTER=off`, or when the router can't decide, the channel map decides: a mention in a mapped channel starts a task there, and a DM, or a mention in an unmapped channel, gets a reply saying what to do instead.
 
 ### Claude Code and GitHub
 
 Each task runs a Claude Code session through the Claude Agent SDK, in a worktree of the repo under `$SUPERAGENT_DATA_DIR/worktrees`. The machine running the bot needs:
 
 - **Claude Code credentials:** a `claude` login on that machine, or `ANTHROPIC_API_KEY` in `apps/agent/.env`.
-- **GitHub access:** `gh auth login`, and git able to push to each configured repo, since workers push their branch and open the pull request themselves.
+- **GitHub access:** workers push their branch and open the pull request themselves. With `SUPERAGENT_GITHUB_TOKEN` they do it as superagent's own account, over that token, whatever this machine is logged in as. Without it, they need `gh auth login` and git able to push to each configured repo, as you.
 
 Workers don't ask before acting. A guard refuses merges, force pushes, pushes to the base branch, writes outside the worktree, and credential reads, but their shell commands still run as your user unless `SUPERAGENT_WORKER_SANDBOX=on`. While developing, map your channel to a scratch repo rather than one you care about.
 
@@ -132,7 +132,7 @@ Everything the bot must remember across a restart, from which Slack events it ha
 - **Back it up:** `sqlite3 ~/.superagent/state.db ".backup state-backup.db"`. Copying `state.db` on its own while the bot runs can miss writes that are still in `state.db-wal`.
 - **Start over:** stop the bot, then delete `state.db`, `state.db-wal`, and `state.db-shm`.
 
-Restarting is safe. On start the bot sends anything still in the outbox, replays events it never finished, and catches up on what you sent while it was down: your DM, each mapped channel, and each open task's thread, from the last message it recorded there. A channel it has no record of yet is skipped, and the startup log says so.
+Restarting is safe. On start the bot sends anything still in the outbox, replays events it never finished, and catches up on what you sent while it was down: your DM, each mapped channel, and the threads of open tasks and of tasks that ended in the last seven days, from the last message it recorded there. A channel it has no record of yet is skipped, and the startup log says so.
 
 Keep the store on a local disk, such as a Docker named volume, and run one bot per store. The bot refuses to start if SQLite can't switch the file to write-ahead logging, which happens on network filesystems.
 
@@ -143,9 +143,9 @@ Keep the store on a local disk, such as a Docker named volume, and run one bot p
 | `apps/agent`                 | `agent`: the bot process, which wires `@repo/core` together           |
 | `packages/core`              | `@repo/core`: the service's core logic, one module per subpath export |
 | `packages/eslint-config`     | shared ESLint configuration                                           |
-| `packages/typescript-config` | shared `tsconfig` bases                                               |
+| `packages/typescript-config` | the shared `tsconfig` base                                            |
 
-`@repo/core/slack` is the bot's Socket Mode connection, `@repo/core/repos` decides which repo a message belongs to, and `@repo/core/store` keeps the state that must survive a restart; `packages/core/README.md` describes all three. `apps/agent` reads the environment and the config, connects, and routes each message; `apps/agent/README.md` describes it.
+`@repo/core` has eight modules: `slack` is the bot's Socket Mode connection, `repos` loads the repo config, `store` keeps the state that must survive a restart, `router` decides what happens to a new message, `tasks` runs the Claude Code workers, `github` follows their pull requests as superagent's own account, `outbox` delivers every Slack and GitHub write, and `recovery` runs on each start. `packages/core/README.md` describes all eight. `apps/agent` reads the environment and the config, connects, and routes each message; `apps/agent/README.md` describes it.
 
 Internal packages are named `@repo/<name>`, export their TypeScript source directly, and have no build step. Consumers depend on them with `"@repo/<name>": "workspace:*"`.
 
@@ -167,7 +167,7 @@ pnpm test         # vitest across the repo
 pnpm format       # prettier --write on ts, tsx and md files
 ```
 
-`pnpm --filter agent start` runs the bot once, without watching. `pnpm build` exists as well, but no workspace defines a build yet.
+`pnpm --filter agent start` runs the bot once, without watching. There is no build step: Node 24 runs the TypeScript source directly.
 
 To target one workspace, filter by its package name:
 
@@ -190,7 +190,7 @@ Run `turbo gen workspace` or create the folder by hand. Either way the new packa
 
 ### Turborepo configuration
 
-Before changing `turbo.json`, read the documentation bundled with the installed `turbo` package. `AGENTS.md` at the root explains how to find it, and the bundled docs match the installed version where online docs may not. Keep the managed block in `AGENTS.md` committed; `turbo` re-adds it otherwise.
+Before changing `turbo.json`, read the documentation bundled with the installed `turbo` package, in `node_modules/turbo/docs/`. It matches the installed version, where online docs may not. `turbo.json` passes the bot's environment variables through to `pnpm dev` by name (`passThroughEnv`), so a new setting goes there too.
 
 ## Using code from other authors
 
