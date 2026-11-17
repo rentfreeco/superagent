@@ -52,7 +52,7 @@ For anything larger than a bug fix, open an issue describing the change before y
    pnpm test
    ```
 
-   The Code Quality workflow (`.github/workflows/code-quality.yml`) runs `pnpm lint` and `pnpm typecheck` on every pull request and every push to `main`, so a red check there means one of those would have failed locally too. It does not run `pnpm format` or `pnpm test`; those are on you.
+   The Code Quality workflow (`.github/workflows/code-quality.yml`) runs `pnpm lint`, `pnpm typecheck`, and `pnpm test` on every pull request and every push to `main`, so a red check there means one of those would have failed locally too. It does not run `pnpm format`; that one is on you.
 
 4. In the description, say what the change does and why. Link the issue it addresses. Call out anything a reviewer must know: a new Slack scope or event subscription, a new environment variable, a behavior change.
 5. Pull requests are squash-merged, so the pull request title must itself be a valid conventional commit message.
