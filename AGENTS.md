@@ -86,7 +86,8 @@ packages/
         resolve-agent-account.ts resolveAgentAccount: whose the token is, refusing the
                                owner's own, with the noreply address commits are authored with
         agent-account-environment.ts agentAccountEnvironment: gh, git pushes, and commit
-                               identity as the agent, over the machine's own credentials
+                               identity as the agent, over the machine's own credentials,
+                               with signing off, since the machine's key is the owner's
         read-pull-request.ts   readPullRequest: a pull request, and only the parts that changed:
                                reviews and comments, the head commit's check runs
         get-all-pages.ts       getAllPages: every page of a GitHub list, throwing rather than
@@ -195,8 +196,8 @@ apps/
       handle-reaction.ts       createReactionHandler: takeReaction in one transaction, settle
                                the event, wake the outbox and runner
       constants.ts             CONFIG_PATH (superagent.config.ts at the repository root),
-                               STORE_FILE_NAME, WORKTREES_DIRECTORY_NAME, and
-                               ROUTER_DIRECTORY_NAME
+                               STORE_FILE_NAME, WORKTREES_DIRECTORY_NAME,
+                               ROUTER_DIRECTORY_NAME, and CACHE_DIRECTORY_NAME
     .env.example               the settings to copy into the git-ignored apps/agent/.env
 superagent.config.example.ts   the committed example; the real superagent.config.ts is git-ignored
 ```
@@ -271,9 +272,9 @@ Each task is one Claude Code session at a time, run through the Agent SDK in the
 - Restart recovery catches up the threads of open tasks and of tasks that ended in the last seven days (`RECOVERY_ENDED_TASK_WINDOW_MS`), since a reply can resume an ended task and channel history doesn't include thread replies.
 - `git fetch origin <branch>` updates `origin/<branch>` only when the remote's fetch refspec covers it, which a single-branch or shallow clone's doesn't, and two fetches in one checkout at once fail on the ref lock. `prepareWorktree` fetches into an explicit `refs/remotes/origin/<branch>` and runs one checkout's git commands one at a time.
 - Workers run in `dontAsk` mode with an allowlist of working tools, so no tool waits on a person. They load only those built-in tools (`WORKER_BUILT_IN_TOOLS`) and only the `superagent` MCP server (`strictMcpConfig`), so neither a repo's `.mcp.json` nor the machine's claude.ai connectors reach them. `SUPERAGENT_DATA_DIR` is refused inside a `.claude` directory, where workers couldn't edit files. `worker-guard.ts` refuses merges, approvals, closing issues, force pushes, pushes to the base branch, file writes outside the worktree and its checkout's `.git`, reads of credential files, and searches whose root holds them. It checks real paths, after symlinks, including credential directories that are themselves links.
-- The guard splits a shell command into the words of each command it runs (`utils/split-shell-commands.ts`, including `sh -c`, `$(…)`, and subshells), so a quoted PR body or commit message that mentions `gh pr merge` passes. It checks every word of each command, so a keyword or wrapper in front (`if`, `env -i`, `xargs`) doesn't hide one, and an unquoted mention such as `echo gh pr merge` is refused. It is still a guard rail, not a boundary: a command it can't see into, such as one built in a variable, gets past it. Bash can still reach whatever the service's user can, unless `SUPERAGENT_WORKER_SANDBOX=on` runs shell commands in Claude Code's sandbox, with writes limited to the worktree and the checkout's `.git` and network limited to GitHub and package registries. Run the service where that is acceptable, such as its own container or machine.
+- The guard splits a shell command into the words of each command it runs (`utils/split-shell-commands.ts`, including `sh -c`, `$(…)`, and subshells), so a quoted PR body or commit message that mentions `gh pr merge` passes. It checks every word of each command, so a keyword or wrapper in front (`if`, `env -i`, `xargs`) doesn't hide one, and an unquoted mention such as `echo gh pr merge` is refused. It is still a guard rail, not a boundary: a command it can't see into, such as one built in a variable, gets past it. Bash can still reach whatever the service's user can, unless `SUPERAGENT_WORKER_SANDBOX=on` runs shell commands in Claude Code's sandbox, with writes limited to the worktree, the checkout's `.git`, and `$SUPERAGENT_DATA_DIR/cache`, where `npm_config_cache`, `XDG_CACHE_HOME`, and the like point package managers, and network limited to GitHub and package registries. Run the service where that is acceptable, such as its own container or machine.
 - MUST: Pass workers only the environment they need. `claude-session.ts` keeps an allowlist (`WORKER_ENVIRONMENT_NAMES` and its prefixes): add a variable there, never pass the whole environment. It also sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: the runner ends a session whose turn goes idle, so a command a worker backgrounded would never finish.
-- MUST: Act on GitHub as superagent's own account when it has one, never the owner's. With `SUPERAGENT_GITHUB_TOKEN`, `agentAccountEnvironment` gives workers the agent's `GH_TOKEN`, a git credential helper that answers with it (after an empty `credential.helper` that drops the machine's own), `insteadOf` rewrites so SSH remotes for GitHub push over https, and the agent as commit author. Startup refuses a token that belongs to `SUPERAGENT_OWNER_GITHUB`.
+- MUST: Act on GitHub as superagent's own account when it has one, never the owner's. With `SUPERAGENT_GITHUB_TOKEN`, `agentAccountEnvironment` gives workers the agent's `GH_TOKEN`, a git credential helper that answers with it (after an empty `credential.helper` that drops the machine's own), `insteadOf` rewrites so SSH remotes for GitHub push over https, the agent as commit author, and commit and tag signing off: the machine's signing key is the owner's, and the agent's commits were signed with it until a sandbox trial caught it. Startup refuses a token that belongs to `SUPERAGENT_OWNER_GITHUB`.
 - NEVER: start a real Claude Code session in tests. Pass a fake `StartConversation` to `createClaudeSessionStarter`, or a fake `StartWorkerSession` to `createTaskRunner`.
 
 ## Router
