@@ -52,7 +52,7 @@ Every event is acked as soon as it arrives (Bolt does this before any middleware
 
 `message.threadTs` is the thread's root ts, which is a stable key for "one task per thread". `fetchThread` reads the whole thread from Slack on each call and marks the bot's own posts with `fromSelf`.
 
-The gateway's `post`, `react`, `findPost`, and `classifyFailure` exist for the outbox sender, which is the only thing that posts. They use their own Slack client, with no built-in retries, rate limits reported as errors, and a 10-second timeout, so a stuck call can't hold up the queue and the outbox's backoff is the only retry.
+The gateway's `post`, `react`, `unreact`, `findPost`, and `classifyFailure` exist for the outbox sender, which is the only thing that posts. They use their own Slack client, with no built-in retries, rate limits reported as errors, and a 10-second timeout, so a stuck call can't hold up the queue and the outbox's backoff is the only retry.
 
 `replay` and `catchUp` exist for restart recovery (`@repo/core/recovery`). `replay` runs an event the gate recorded but never settled back through the gate's checks. `catchUp` reads a channel or thread after a given ts and feeds the owner's missed messages through the real gate, with Bolt's `processEvent`, as if they had just arrived.
 
@@ -65,7 +65,7 @@ The gateway's `post`, `react`, `findPost`, and `classifyFailure` exist for the o
 
 ## `@repo/core/repos`
 
-Which repo a message is about. Each Slack channel maps to one repo, so every request in that channel, and every follow-up in its threads, refers to that repo.
+The repos superagent works on, and the channel map. The router (`@repo/core/router`) decides which configured repo a new request is about, with a mapped channel's repo as its default. `routeMessage` is the channel map on its own, which the router falls back to: a mapped channel's repo, or the reply for a DM or an unmapped channel. A follow-up in a task's thread goes to that task, whatever the channel.
 
 ```ts
 import { loadConfig, routeMessage } from "@repo/core/repos";
@@ -76,7 +76,7 @@ const { repos, channelRepos } = await loadConfig("superagent.config.ts");
 // inside onMessage(message):
 const route = routeMessage(channelRepos, message);
 // route.kind === "reply": queue route.text as a post in the message's thread
-// route.kind === "repo": route.repo is { name, github, path, baseBranch }
+// route.kind === "repo": route.repo is { name, github, path, baseBranch, description? }
 ```
 
 The config is a TypeScript file at the repository root. Copy [`superagent.config.example.ts`](../../superagent.config.example.ts) to `superagent.config.ts`, which is git-ignored:
@@ -134,17 +134,19 @@ store.transaction(() => {
 
 `openStore` creates the file and its directory, refuses to run unless SQLite actually switched to write-ahead logging, and applies any pending migrations. It also refuses a store written by newer code.
 
-| Table     | Answers                                                    | Guarantees                                                                                          |
-| --------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `events`  | Have I seen this Slack event, and what did I do with it?   | One row per `event_id`; one event per message claims it; dropped events lose their text             |
-| `threads` | Which task owns this thread? `null` means the router       | A router thread can pass to a task; a task's thread never moves                                     |
-| `tasks`   | What work exists and where is it?                          | Short random IDs; every state change goes through `TASK_TRANSITIONS`, and an illegal one throws     |
-| `inputs`  | What has each worker been told, and what is still waiting? | One input per `(source, ref)`                                                                       |
-| `reports` | What did the worker last say?                              | `latest(taskId)` is the newest                                                                      |
-| `outbox`  | What must reach Slack or GitHub, and did it?               | One entry per `dedupeKey`; exponential backoff from 5 seconds up to 5 minutes, failed after 8 tries |
-| `kv`      | Router session ID, prompt version, cursors                 | Values are JSON, read back through the zod schema you pass                                          |
+| Table        | Answers                                                        | Guarantees                                                                                          |
+| ------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `events`     | Have I seen this Slack event, and what did I do with it?       | One row per `event_id`; one event per message claims it; dropped events lose their text             |
+| `threads`    | Which task owns this thread? `null` means the router           | A router thread can pass to a task; a task's thread never moves                                     |
+| `tasks`      | What work exists and where is it?                              | Short random IDs; every state change goes through `TASK_TRANSITIONS`, and an illegal one throws     |
+| `inputs`     | What has each worker been told, and what is still waiting?     | One input per `(source, ref)`                                                                       |
+| `reports`    | What did the worker last say?                                  | `latest(taskId)` is the newest                                                                      |
+| `outbox`     | What must reach Slack or GitHub, and did it?                   | One entry per `dedupeKey`; exponential backoff from 5 seconds up to 5 minutes, failed after 8 tries |
+| `candidates` | Which owner messages no task owns are waiting for the router?  | One per message, and once more per task that hands one back                                         |
+| `decisions`  | What was decided for each candidate, and why?                  | At most one per candidate, by the router or the channel-map fallback                                |
+| `kv`         | The router's session ID, and each pull request's read position | Values are JSON, read back through the zod schema you pass                                          |
 
-`store.transaction(work)` runs synchronous work in one `BEGIN IMMEDIATE` transaction and rolls it all back if `work` throws. A transaction inside another joins the outer one. `openTestStore()` gives tests an in-memory store with a clock they can move.
+`store.transaction(work)` runs synchronous work in one `BEGIN IMMEDIATE` transaction and rolls it all back if `work` throws. A transaction inside another joins the outer one. `openTestStore()`, in `store/open-test-store.ts`, gives tests an in-memory store with a clock they can move; tests import it from there, since `@repo/core/store` doesn't export it.
 
 ## `@repo/core/github`
 
@@ -163,7 +165,7 @@ createClaudeSessionStarter({ gitHubAccount });
 ```
 
 - **`resolveAgentAccount`** asks GitHub whose the token is, refuses the owner's own account, and returns its login and GitHub's noreply address for it.
-- **Workers with an account** get its token as `GH_TOKEN`, so `gh` acts as the agent. Git pushes to GitHub over https with the same token, even where a remote is SSH and whatever credential helpers or SSH keys the machine has. Commits are authored as the agent.
+- **Workers with an account** get its token as `GH_TOKEN`, so `gh` acts as the agent. Git pushes to GitHub over https with the same token, even where a remote is SSH and whatever credential helpers or SSH keys the machine has. Commits are authored as the agent, and unsigned: the machine's signing key is the owner's.
 - **Without one,** workers use the machine's own `gh` and git logins, as before.
 
 ```ts
@@ -183,7 +185,7 @@ watcher.start(); // polls every minute; watcher.stop() on shutdown
 ```
 
 - **What reaches the worker:** the owner's reviews and comments, installed bots' such as Greptile's (three rounds per pull request), and failed checks on the head commit, each as a `[github]` input that wakes the task. A comment edited after it was read comes again, saying so, with its new text, such as Greptile's summary, which it rewrites after each review. The worker answers on GitHub: 👀 on the comment, resolving a review thread it fixed or replying in it to decline, and a report posted as a pull request comment instead of in Slack. Once the turn ends, 👀 becomes 👍. Other people's comments and the agent's own are dropped. CI and bots never wake a failed or stopped task.
-- **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. Anything else gets one note in the thread and is left alone.
+- **Ownership:** a pull request is followed only on the task's `agent/<id>` branch in its repo. `recordReport` turns down a report naming a pull request in another repo, and the worker is told why. One off the task's branch, or from a fork, gets one note in the thread and is left alone.
 - **A merge or close** posts once in the thread and ends the task as done.
 - **Cost:** a quiet pull request takes one request a minute, and one more every five minutes for its checks. Reviews and comments are read only when it changed, and checks for a new head commit, while some are pending, and every five minutes otherwise, so CI that starts late or is rerun still counts.
 
@@ -301,6 +303,7 @@ const taskRunner = createTaskRunner({
   worktreesDirectory: "/data/worktrees",
   startSession: createClaudeSessionStarter(),
   wakeOutbox: outboxSender.wake,
+  wakeRouter: () => router.wake(), // a worker's hand_back queues a router candidate
   logger: console,
   ownerUserId, // U…, whose messages read_thread shows
 });
