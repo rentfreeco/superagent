@@ -7,7 +7,8 @@ const TOKEN_CREDENTIAL_HELPER =
  * A process environment that acts on GitHub as the agent: gh through
  * GH_TOKEN, and git pushing over https with the same token even where a
  * remote is SSH, ignoring the machine's own credential helpers, and
- * authoring commits as the agent.
+ * authoring commits as the agent, unsigned, since the machine's signing
+ * key is the owner's.
  */
 export const agentAccountEnvironment = ({
   token,
@@ -19,6 +20,8 @@ export const agentAccountEnvironment = ({
     ["credential.https://github.com.helper", TOKEN_CREDENTIAL_HELPER],
     ["url.https://github.com/.insteadOf", "git@github.com:"],
     ["url.https://github.com/.insteadOf", "ssh://git@github.com/"],
+    ["commit.gpgsign", "false"],
+    ["tag.gpgsign", "false"],
   ];
   return {
     GH_TOKEN: token,

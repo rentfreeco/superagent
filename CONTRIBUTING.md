@@ -52,7 +52,7 @@ For anything larger than a bug fix, open an issue describing the change before y
    pnpm test
    ```
 
-   The Code Quality workflow (`.github/workflows/code-quality.yml`) runs `pnpm lint` and `pnpm typecheck` on every pull request and every push to `main`, so a red check there means one of those would have failed locally too. It does not run `pnpm format` or `pnpm test`; those are on you.
+   The Code Quality workflow (`.github/workflows/code-quality.yml`) runs `pnpm lint`, `pnpm typecheck`, and `pnpm test` on every pull request and every push to `main`, so a red check there means one of those would have failed locally too. It does not run `pnpm format`; that one is on you.
 
 4. In the description, say what the change does and why. Link the issue it addresses. Call out anything a reviewer must know: a new Slack scope or event subscription, a new environment variable, a behavior change.
 5. Pull requests are squash-merged, so the pull request title must itself be a valid conventional commit message.
@@ -117,7 +117,7 @@ The bot reads its settings from `apps/agent/.env`, which is git-ignored. Copy `a
 | `LOG_LEVEL`                 | optional: `debug`, `info` (the default), `warn`, or `error`                                                                                                                                         |
 | `SUPERAGENT_DATA_DIR`       | optional: where the store and task worktrees live, outside any `.claude` directory; `~/.superagent` by default                                                                                      |
 | `ANTHROPIC_API_KEY`         | optional: Claude Code's credentials; unset uses your `claude` login                                                                                                                                 |
-| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default                                                                                                              |
+| `SUPERAGENT_WORKER_SANDBOX` | optional: `on` runs workers' shell commands in Claude Code's sandbox; `off` by default. On macOS, `gh` can't verify TLS inside it yet                                                               |
 | `SUPERAGENT_ROUTER`         | optional: `off` lets the channel map decide every new message, without a router session; `on` by default                                                                                            |
 | `SUPERAGENT_GITHUB_TOKEN`   | optional: a token for superagent's own GitHub account, with write access to each configured repo; workers push, open pull requests, and comment as it. Unset, they use this machine's GitHub logins |
 | `SUPERAGENT_OWNER_GITHUB`   | required with `SUPERAGENT_GITHUB_TOKEN`: your GitHub login, so superagent can tell your comments from its own, and refuse a token that's yours                                                      |

@@ -24,6 +24,7 @@ export {
 export {
   agentEnvironment,
   type ClaudeSessionStarterOptions,
+  type WorkerSandbox,
   createClaudeSessionStarter,
   type StartWorkerSession,
   type WorkerSession,

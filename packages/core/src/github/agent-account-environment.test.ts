@@ -54,6 +54,11 @@ describe("agentAccountEnvironment", () => {
     expect(credential).toContain("password=ghp_agent_token\n");
   });
 
+  it("doesn't sign commits or tags, whatever the machine's git config says, since its signing key is the owner's", async () => {
+    expect(await runGit(["config", "--get", "commit.gpgsign"])).toBe("false\n");
+    expect(await runGit(["config", "--get", "tag.gpgsign"])).toBe("false\n");
+  });
+
   it("sends SSH remotes for GitHub over https, so the machine's SSH key isn't used", async () => {
     expect(
       await runGit([
